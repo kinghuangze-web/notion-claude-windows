@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 — 2026-10-14
+
+- Make the README start with the Agent execution path; retain manual Windows entry points.
+- Add an execution contract, non-mutating dependency discovery and redacted readiness states with exit codes.
+- Load the current PowerShell host's security module explicitly when Agent subprocesses inherit another edition's module paths.
+- Expand token_v2 retrieval and dashboard import instructions, including Windows shortcuts, domain selection, complete Value copying and failed-import checks.
+- Clarify minimal prompt, text protocol, fresh-thread context and reasoning-control limits.
+
 ## 1.0.0 — 2026-10-14
 
 - Pin the experimental notion_manager Agent transport to its reproducible base commit.

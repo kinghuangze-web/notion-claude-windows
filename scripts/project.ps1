@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('init','start','stop','status','verify-local','claude')]
+    [ValidateSet('init','start','stop','status','ready','verify-local','claude')]
     [string]$Action = 'status',
     [string]$WorkDir,
     [Parameter(ValueFromRemainingArguments=$true)]

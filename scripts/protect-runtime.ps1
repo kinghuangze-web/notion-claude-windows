@@ -1,4 +1,7 @@
 # The upstream Unix mode assertion cannot express Windows NTFS ACLs.
+# Agent subprocesses may inherit PowerShell 7 module paths while running 5.1.
+# Load this host's own module explicitly; leave global PSModulePath unchanged.
+Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $runtimePath = Join-Path $ProjectRoot 'runtime'
 $runtimeAcl = Get-Acl -LiteralPath $runtimePath
 if (-not $runtimeAcl.AreAccessRulesProtected) {

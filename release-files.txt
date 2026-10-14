@@ -2,10 +2,12 @@
 .gitignore
 .project-id
 Acceptance.cmd
+AGENTS.md
 CHANGELOG.md
 Claude-Code.cmd
 docs/ACCEPTANCE.md
 docs/ACCOUNT_IMPORT.md
+docs/AGENT_SETUP.md
 docs/CLEANUP.md
 docs/DEVELOPMENT.md
 docs/INSTALL_WINDOWS.md
@@ -23,6 +25,7 @@ scripts/acceptance.py
 scripts/check_release.py
 scripts/claude_notion.py
 scripts/cleanup.ps1
+scripts/doctor.ps1
 scripts/env.ps1
 scripts/manage.py
 scripts/process-time.ps1
@@ -33,6 +36,7 @@ scripts/setup.ps1
 scripts/test_cleanup.ps1
 scripts/test_launcher.py
 scripts/test_lifecycle.py
+scripts/test_readiness.py
 Setup.cmd
 Start-Gateway.cmd
 Status.cmd

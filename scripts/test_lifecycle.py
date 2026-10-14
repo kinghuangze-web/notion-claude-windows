@@ -33,6 +33,9 @@ with tempfile.TemporaryDirectory(prefix="lifecycle-", dir=fixture_parent) as dir
         manage.start()
         assert manage.owned_process()["pid"] == first["pid"], "Repeated start created a duplicate process"
         manage.verify_local()
+        ready_state, ready_code = manage.readiness()
+        assert ready_state['state'] == 'awaiting_account' and ready_code == 3
+        assert ready_state['notion_inference_verified'] is False
         # A stale creation time must fail closed without stopping the process.
         invalid = dict(first, creation_date="/Date(0)/")
         manage.save_json(manage.PROCESS_FILE, invalid)
@@ -57,6 +60,7 @@ with tempfile.TemporaryDirectory(prefix="lifecycle-", dir=fixture_parent) as dir
             "real_executable_started": True, "idempotent_start": True,
             "stale_pid_refused": True, "stop_verified": True, "restart_verified": True,
             "notion_inference_requests": 0,
+            "zero_account_readiness_handoff": True,
         }
         manage.save_json(project_root / "evidence" / "lifecycle-verification.json", outcome)
         print(json.dumps(outcome, indent=2))

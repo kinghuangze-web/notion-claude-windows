@@ -1,3 +1,4 @@
+param([switch]$InspectOnly)
 # Process-local paths. Resolve installed tools before redirecting application data.
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -30,6 +31,8 @@ if (-not $ProjectPython) {
     }
     if (-not $ProjectPython) { $ProjectPython = Find-ProjectTool 'python.exe' @() }
 }
+# Preflight reuses discovery without changing environment variables or making directories.
+if ($InspectOnly) { return }
 $projectEnvironment = @{
     GOPATH = "$ProjectRoot\_cache\go-path"
     GOMODCACHE = "$ProjectRoot\_cache\go-mod"

@@ -10,13 +10,26 @@ Claude Code CLI → 本机网关 127.0.0.1:8081 → Notion AI / Opus 5.5
       └─ 本机执行 Bash / Read / Edit，再提交工具结果
 ```
 
-## 开始使用
+## 交给 Agent 执行
+
+将仓库链接和下面这段任务交给能执行 Windows 命令的 Agent：
+
+```text
+在 Windows 的 D 盘独立目录部署 https://github.com/kinghuangze-web/notion-claude-windows 。
+先读取 AGENTS.md 和 docs/AGENT_SETUP.md，检查依赖，执行固定版本安装、启动和本地检查。
+账号未导入时，给出本机管理页地址及 token_v2 获取步骤，等我本人在本机导入；不要让我把凭证发到聊天。
+导入后继续五项真实验收，核对实际文件和上游模型确认。不要修改全局供应商配置，保留清理入口和失败证据。
+```
+
+项目已有非交互安装、启动和验收脚本。新增 `doctor.ps1` 返回依赖检查 JSON，`project.ps1 -Action ready` 返回当前阶段和退出码。具体命令及状态处理见 [Agent 执行流程](docs/AGENT_SETUP.md)。`.cmd` 包装器供人工双击使用，Agent 直接运行 `.ps1`，避免 pause 等待。
+
+## 手动开始使用
 
 1. 准备 Windows x64、Git for Windows、Go 1.26+、Python 3.11+、原生 Claude Code CLI。先在自己的 Notion 工作区确认 AI 能用，且可选择 Opus 5.5。
 2. 从 **Code → Download ZIP** 下载并解压，放到独立目录，例如 `D:\Projects\notion-claude-windows`。整个项目放在 D 盘，后续缓存和运行数据也跟随项目。
 3. 双击 `Setup.cmd`。脚本取得固定上游提交、应用补丁、下载依赖、编译并检查。初次安装需要访问 GitHub、Go 模块服务和 PyPI。
 4. 双击 `Start-Gateway.cmd`，在 Chrome 打开 `http://127.0.0.1:8081/dashboard/`。管理密码在本机 `runtime\private\admin-password.txt`。
-5. **本人登录 Notion，并将自己的 `token_v2` 仅导入本机管理页**。核对账号和工作区，再用 `Status.cmd` 确认 `usable_accounts` 至少为 1。
+5. **本人获取并导入 `token_v2`**：在已登录 Notion 的 Chrome 页面按 `F12` 或 `Ctrl + Shift + I`，选择 `Application（应用）→ Storage（存储）→ Cookies → 当前 Notion 域名`，在 Name 列找到 `token_v2`，复制这一行完整的 **Value**，直接粘贴到本机管理页“添加账号”的输入框。看不到 Application 时点击顶部 `»`；[完整位置说明与排错](docs/ACCOUNT_IMPORT.md)。核对账号和工作区，再用 `Status.cmd` 确认 `usable_accounts` 至少为 1。
 6. 双击 `Claude-Code.cmd`，从项目的 `demo` 目录开始测试。默认请求 `claude-opus-5-5`，不降级到 Auto。
 7. 按 [验收教程](docs/ACCEPTANCE.md) 执行三个小任务，或双击 `Acceptance.cmd` 运行五项真实验收。真实验收会使用 Notion AI 额度。
 
@@ -26,7 +39,7 @@ Claude Code CLI → 本机网关 127.0.0.1:8081 → Notion AI / Opus 5.5
 
 | 操作 | 原因 |
 |---|---|
-| 安装已有基础软件，处理安装权限或系统提示 | 安装程序会写入软件目录，本工具包不替用户安装系统软件 |
+| 处理需要交互的安装权限或系统提示 | Agent 可在已授权范围内检查、安装依赖；本工具包不自动安装系统软件 |
 | 登录 Notion，确认账号与目标工作区的 AI 权益 | 登录会话和权益属于自己的账号 |
 | 在 Chrome 查看并导入自己的 token_v2 | 它是敏感登录凭证，仓库没有预置账号 |
 | 在本机管理页核对识别的账号、工作区及可用状态 | 同一账号的不同工作区可能有不同额度 |

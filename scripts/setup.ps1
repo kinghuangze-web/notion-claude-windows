@@ -66,4 +66,6 @@ try {
 if ($LASTEXITCODE -ne 0) { throw 'Local configuration initialization failed.' }
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_launcher.py -v
 if ($LASTEXITCODE -ne 0) { throw 'Launcher checks failed.' }
+& .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_readiness.py -v
+if ($LASTEXITCODE -ne 0) { throw 'Readiness state checks failed.' }
 Write-Output 'Setup complete. Start-Gateway.cmd starts the dashboard; import a Notion account locally before inference.'

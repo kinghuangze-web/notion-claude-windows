@@ -221,11 +221,56 @@ def verify_local():
         raise RuntimeError("Local verification failed.")
 
 
+def readiness():
+    """Return a redacted state and exit code; never import credentials or infer."""
+    value = {"state": "awaiting_setup", "notion_inference_verified": False}
+    code = 2
+    if CONFIG.is_file() and EXE.is_file():
+        cfg = config()
+        if cfg.get("server", {}).get("host") != "127.0.0.1" or cfg.get("proxy", {}).get("default_model") != "claude-opus-5-5" or cfg.get("proxy", {}).get("require_opus55") is not True or cfg.get("proxy", {}).get("agent_thread") is not True:
+            value["state"], code = "invalid_configuration", 4
+        else:
+            try:
+                running = owned_process()
+            except RuntimeError:
+                value["state"] = "process_identity_mismatch"
+                return value, 4
+            if not running:
+                value["state"] = "awaiting_gateway"
+                return value, 2
+            value["dashboard_url"] = f"http://127.0.0.1:{cfg['server']['port']}/dashboard/"
+            try:
+                http, body = request("/health")
+                model_http, _ = request("/v1/models", cfg["server"]["api_key"])
+                value["health_http"], value["models_http"] = http, model_http
+                if http != 200 or model_http != 200:
+                    value["state"], code = "gateway_unhealthy", 4
+                else:
+                    health = json.loads(body)
+                    value["usable_accounts"] = health.get("available", 0)
+                    if value["usable_accounts"] > 0:
+                        value["state"], code = "ready_for_acceptance", 0
+                    else:
+                        value["state"], code = "awaiting_account", 3
+                        value["human_step"] = "Import your own token_v2 in the local dashboard; see docs/ACCOUNT_IMPORT.md."
+            except (OSError, ValueError, urllib.error.URLError):
+                value["state"], code = "gateway_unhealthy", 4
+    return value, code
+
+
+def ready():
+    value, code = readiness()
+    print(json.dumps(value, ensure_ascii=False, indent=2))
+    return code
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("init", "start", "stop", "status", "verify-local"))
+    parser.add_argument("action", choices=("init", "start", "stop", "status", "ready", "verify-local"))
     action = parser.parse_args().action
-    globals()[action.replace("-", "_") if action != "init" else "initialize"]()
+    result = globals()[action.replace("-", "_") if action != "init" else "initialize"]()
+    if isinstance(result, int):
+        raise SystemExit(result)
 
 
 if __name__ == "__main__":

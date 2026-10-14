@@ -15,6 +15,7 @@
 ```powershell
 . .\scripts\env.ps1
 .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_launcher.py -v
+.\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_readiness.py -v
 .\.venv\Scripts\python.exe .\scripts\test_lifecycle.py
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test_cleanup.ps1
 .\.venv\Scripts\python.exe .\scripts\check_release.py --check-index
