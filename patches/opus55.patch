@@ -1,0 +1,310 @@
+diff --git a/internal/proxy/agent_model.go b/internal/proxy/agent_model.go
+new file mode 100644
+index 0000000..0ad48a6
+--- /dev/null
++++ b/internal/proxy/agent_model.go
+@@ -0,0 +1,66 @@
++package proxy
++
++import (
++	"fmt"
++	"strings"
++)
++
++var agentModelFetcher = FetchModels
++
++// Opus resolves from this account's fresh listing, never a legacy family fallback.
++func resolveAgentModel(acc *Account, model string) (string, error) {
++	switch strings.ToLower(strings.TrimSpace(model)) {
++	case "auto":
++		if AppConfig != nil && AppConfig.Proxy.RequireOpus55 {
++			return "", fmt.Errorf("this installation is locked to Opus 5.5; Auto is prohibited")
++		}
++		return "", nil
++	case "opus-5.5", "claude-opus-5-5", "claude-opus-5.5":
++	default:
++		return "", fmt.Errorf("unsupported Notion Agent model %q; no model fallback is permitted", model)
++	}
++	models, err := agentModelFetcher(acc)
++	if err != nil {
++		return "", fmt.Errorf("cannot verify the account's current available Opus 5.5 model")
++	}
++	selected := ""
++	for _, entry := range models {
++		if normalizeModelName(entry.Name) == "opus-5.5" {
++			if entry.ID == "" || selected != "" {
++				return "", fmt.Errorf("Opus 5.5 model listing is empty or ambiguous")
++			}
++			selected = entry.ID
++		}
++	}
++	if selected == "" {
++		return "", fmt.Errorf("Opus 5.5 is unavailable for this account; refusing Auto fallback")
++	}
++	return selected, nil
++}
++
++// Shape captured by the explicit live probe on 2026-10-14. Missing fields fail closed.
++type agentCreateResponse struct {
++	ThreadID string `json:"threadId"`
++	Thread   struct {
++		ID   string `json:"id"`
++		Data struct {
++			AgentProvider struct {
++				Model         string `json:"model"`
++				SelectedModel string `json:"selectedModel"`
++			} `json:"agent_provider"`
++		} `json:"data"`
++	} `json:"thread"`
++}
++
++func verifyAgentModelConfirmation(created agentCreateResponse, requested, threadID string) error {
++	provider := created.Thread.Data.AgentProvider
++	if created.ThreadID != threadID || created.Thread.ID != threadID {
++		return fmt.Errorf("Notion model confirmation belongs to a missing or different thread")
++	}
++	if provider.Model == "" || provider.SelectedModel == "" ||
++		provider.Model != requested || provider.SelectedModel != requested {
++		return fmt.Errorf("Notion model confirmation mismatch: requested=%s confirmed=%s selected=%s; refusing fallback",
++			requested, provider.Model, provider.SelectedModel)
++	}
++	return nil
++}
+diff --git a/internal/proxy/agent_model_test.go b/internal/proxy/agent_model_test.go
+new file mode 100644
+index 0000000..f7779f4
+--- /dev/null
++++ b/internal/proxy/agent_model_test.go
+@@ -0,0 +1,126 @@
++package proxy
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestAgentFixedModelFreshExactListing(t *testing.T) {
++	original := agentModelFetcher
++	defer func() { agentModelFetcher = original }()
++	queried := 0
++	agentModelFetcher = func(*Account) ([]ModelEntry, error) {
++		queried++
++		return []ModelEntry{{Name: "Opus 4.6", ID: "old"}, {Name: "Opus 5.5", ID: "current-live-id"}}, nil
++	}
++	for _, name := range []string{"opus-5.5", "claude-opus-5-5", "claude-opus-5.5"} {
++		actual, err := resolveAgentModel(&Account{}, name)
++		if err != nil || actual != "current-live-id" {
++			t.Fatalf("exact selection failed: %q %v", actual, err)
++		}
++	}
++	if queried != 3 {
++		t.Fatal("model list was not checked for every fixed-model request")
++	}
++	if id, err := resolveAgentModel(&Account{}, "auto"); err != nil || id != "" || queried != 3 {
++		t.Fatal("Auto changed")
++	}
++	if _, err := resolveAgentModel(&Account{}, "claude-opus-4-6"); err == nil || queried != 3 {
++		t.Fatal("unknown model silently selected another model")
++	}
++	agentModelFetcher = func(*Account) ([]ModelEntry, error) { return []ModelEntry{{Name: "Opus 4.6", ID: "old"}}, nil }
++	if _, err := resolveAgentModel(&Account{}, "claude-opus-5-5"); err == nil {
++		t.Fatal("unavailable model fell back")
++	}
++	agentModelFetcher = func(*Account) ([]ModelEntry, error) {
++		return []ModelEntry{{Name: "Opus 5.5", ID: "a"}, {Name: "Opus 5.5", ID: "b"}}, nil
++	}
++	if _, err := resolveAgentModel(&Account{}, "claude-opus-5-5"); err == nil {
++		t.Fatal("ambiguous listing accepted")
++	}
++}
++
++func confirmedCreate(thread, model, selected string) agentCreateResponse {
++	var created agentCreateResponse
++	created.ThreadID = thread
++	created.Thread.ID = thread
++	created.Thread.Data.AgentProvider.Model = model
++	created.Thread.Data.AgentProvider.SelectedModel = selected
++	return created
++}
++
++func TestAgentFixedModelConfirmationFailsClosed(t *testing.T) {
++	for _, created := range []agentCreateResponse{
++		confirmedCreate("thread", "wanted", "wanted"),
++		confirmedCreate("other", "wanted", "wanted"),
++		confirmedCreate("thread", "other", "wanted"),
++		confirmedCreate("thread", "wanted", "other"),
++		confirmedCreate("thread", "", "wanted"),
++		confirmedCreate("thread", "wanted", ""),
++	} {
++		err := verifyAgentModelConfirmation(created, "wanted", "thread")
++		wantSuccess := created.ThreadID == "thread" && created.Thread.Data.AgentProvider.Model == "wanted" && created.Thread.Data.AgentProvider.SelectedModel == "wanted"
++		if (err == nil) != wantSuccess {
++			t.Fatalf("confirmation mismatch was accepted: %+v", created)
++		}
++	}
++}
++
++func TestAgentFixedModelLockRejectsAuto(t *testing.T) {
++	previous := AppConfig
++	AppConfig = DefaultConfig()
++	AppConfig.Proxy.RequireOpus55 = true
++	defer func() { AppConfig = previous }()
++	if _, err := resolveAgentModel(&Account{}, "auto"); err == nil {
++		t.Fatal("fixed installation permitted Auto")
++	}
++}
++
++func TestAgentFixedModelTransportConfirmedBeforeOutput(t *testing.T) {
++	oldCfg, oldBase := AppConfig, NotionAPIBase
++	AppConfig = DefaultConfig()
++	AppConfig.Timeouts.InferenceTimeout = 2
++	defer func() { AppConfig, NotionAPIBase = oldCfg, oldBase }()
++	selected := "wanted"
++	polled := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if strings.HasSuffix(r.URL.Path, "createAgentThread") {
++			var body map[string]interface{}
++			json.NewDecoder(r.Body).Decode(&body)
++			if body["model"] != "wanted" {
++				t.Error("fixed upstream ID omitted")
++			}
++			json.NewEncoder(w).Encode(confirmedCreate(body["threadId"].(string), "wanted", selected))
++		} else {
++			polled++
++			w.Write([]byte(capturedShape))
++		}
++	}))
++	defer server.Close()
++	NotionAPIBase = server.URL
++	output := false
++	err := callAgentThreadWithSelection(&Account{}, nil, "claude-opus-5-5", "wanted", func(string, bool, *UsageInfo) { output = true }, server.Client())
++	if err != nil || !output || polled == 0 {
++		t.Fatalf("confirmed transport failed: %v", err)
++	}
++	output, polled, selected = false, 0, "wrong"
++	err = callAgentThreadWithSelection(&Account{}, nil, "claude-opus-5-5", "wanted", func(string, bool, *UsageInfo) { output = true }, server.Client())
++	if err == nil || output || polled != 0 {
++		t.Fatal("unconfirmed output or transcript was exposed")
++	}
++}
++
++func TestAgentFixedModelPreservesLocalToolProtocol(t *testing.T) {
++	oldCfg := AppConfig
++	AppConfig = DefaultConfig()
++	AppConfig.Proxy.AgentThread = true
++	defer func() { AppConfig = oldCfg }()
++	tools := []Tool{{Function: ToolFunction{Name: "Read", Parameters: map[string]interface{}{"type": "object"}}}}
++	messages := injectToolsIntoMessages([]ChatMessage{{Role: "user", Content: "read test file"}}, tools, "claude-opus-5-5", nil)
++	if !strings.Contains(messages[0].Content, "LOCAL ACTION PROTOCOL") || !strings.Contains(messages[0].Content, "Read") {
++		t.Fatal("fixed model fell through to the legacy tool bridge")
++	}
++}
+diff --git a/internal/proxy/agent_thread.go b/internal/proxy/agent_thread.go
+index a40703a..3bb9df1 100644
+--- a/internal/proxy/agent_thread.go
++++ b/internal/proxy/agent_thread.go
+@@ -3,9 +3,12 @@ package proxy
+ import (
+ 	"bytes"
+ 	"context"
++	"crypto/sha256"
++	"encoding/hex"
+ 	"encoding/json"
+ 	"fmt"
+ 	"io"
++	"log"
+ 	"net/http"
+ 	"sort"
+ 	"strings"
+@@ -136,16 +139,21 @@ func agentThreadBody(acc *Account, messages []ChatMessage) map[string]interface{
+ }
+ 
+ func callAgentThreadInference(acc *Account, messages []ChatMessage, model string, cb StreamCallback, opt CallOptions) error {
+-	if !strings.EqualFold(model, "auto") {
+-		return fmt.Errorf("Notion Agent transport currently supports model auto only")
++	notionModel, err := resolveAgentModel(acc, model)
++	if err != nil {
++		return err
+ 	}
+ 	if len(opt.Attachments) > 0 {
+ 		return fmt.Errorf("Notion Agent transport does not support attachments")
+ 	}
+-	return callAgentThreadWithClient(acc, messages, cb, getChromeHTTPClient(AppConfig.InferenceTimeoutDuration()))
++	return callAgentThreadWithSelection(acc, messages, model, notionModel, cb, getChromeHTTPClient(AppConfig.InferenceTimeoutDuration()))
+ }
+ 
+ func callAgentThreadWithClient(acc *Account, messages []ChatMessage, cb StreamCallback, client *http.Client) error {
++	return callAgentThreadWithSelection(acc, messages, "auto", "", cb, client)
++}
++
++func callAgentThreadWithSelection(acc *Account, messages []ChatMessage, requestedAlias, notionModel string, cb StreamCallback, client *http.Client) error {
+ 	timeout := AppConfig.InferenceTimeoutDuration()
+ 	if timeout <= 0 {
+ 		return fmt.Errorf("Notion Agent inference timeout must be positive")
+@@ -187,7 +195,23 @@ func callAgentThreadWithClient(acc *Account, messages []ChatMessage, cb StreamCa
+ 		return nil
+ 	}
+ 	body := agentThreadBody(acc, messages)
+-	if err := post("createAgentThread", body, nil); err != nil {
++	threadHash := ""
++	if notionModel != "" {
++		body["model"] = notionModel
++		body["reasoningEffort"] = "medium"
++		var created agentCreateResponse
++		if err := post("createAgentThread", body, &created); err != nil {
++			return err
++		}
++		if err := verifyAgentModelConfirmation(created, notionModel, body["threadId"].(string)); err != nil {
++			return err
++		}
++		hash := sha256.Sum256([]byte(body["threadId"].(string)))
++		threadHash = hex.EncodeToString(hash[:])
++		log.Printf("[agent-model] alias=%s requested=%s confirmed=%s selected=%s thread_sha256=%s",
++			requestedAlias, notionModel, created.Thread.Data.AgentProvider.Model,
++			created.Thread.Data.AgentProvider.SelectedModel, threadHash)
++	} else if err := post("createAgentThread", body, nil); err != nil {
+ 		return err
+ 	}
+ 	query := map[string]interface{}{"spaceId": acc.SpaceID, "threadId": body["threadId"], "direction": "backward", "limit": 100}
+@@ -206,6 +230,9 @@ func callAgentThreadWithClient(acc *Account, messages []ChatMessage, cb StreamCa
+ 			}
+ 			cb(text, false, nil)
+ 			cb("", true, nil)
++			if notionModel != "" {
++				log.Printf("[agent-model] completed requested=%s thread_sha256=%s", notionModel, threadHash)
++			}
+ 			return nil
+ 		}
+ 		timer := time.NewTimer(700 * time.Millisecond)
+diff --git a/internal/proxy/config.go b/internal/proxy/config.go
+index 23d6ee8..0bcfce2 100644
+--- a/internal/proxy/config.go
++++ b/internal/proxy/config.go
+@@ -45,7 +45,8 @@ type ServerConfig struct {
+ }
+ 
+ type ProxyConfig struct {
+-	AgentThread           bool   `yaml:"agent_thread"` // Current Notion personal Agent transport (Auto only).
++	AgentThread           bool   `yaml:"agent_thread"`   // Current Notion personal Agent transport (Auto only).
++	RequireOpus55         bool   `yaml:"require_opus55"` // Reject Auto in this fixed-model local installation.
+ 	NotionAPIBase         string `yaml:"notion_api_base"`
+ 	ClientVersion         string `yaml:"client_version"`
+ 	DefaultModel          string `yaml:"default_model"`
+diff --git a/internal/proxy/tools.go b/internal/proxy/tools.go
+index 0d2cd89..3541097 100644
+--- a/internal/proxy/tools.go
++++ b/internal/proxy/tools.go
+@@ -408,7 +408,9 @@ func injectToolsIntoMessages(messages []ChatMessage, tools []Tool, model string,
+ 		return messages
+ 	}
+ 
+-	if AppConfig != nil && AppConfig.Proxy.AgentThread && strings.EqualFold(model, "auto") {
++	if AppConfig != nil && AppConfig.Proxy.AgentThread &&
++		(strings.EqualFold(model, "auto") || strings.EqualFold(model, "opus-5.5") ||
++			strings.EqualFold(model, "claude-opus-5-5") || strings.EqualFold(model, "claude-opus-5.5")) {
+ 		prompt := "LOCAL ACTION PROTOCOL\nThe local client executes the following actions on the user's computer. Emit only a JSON object {\"name\":\"function_name\",\"arguments\":{...}} to request an action, with actual arguments matching its schema. Do not try Notion's hosted filesystem or shell for these paths. Wait for the returned local tool message before claiming a result. Never invent results. If no action is needed, reply normally.\n" + buildOpenAIToolsBlock(tools)
+ 		if len(toolChoice) > 0 && toolChoice[0] != nil {
+ 			choice, _ := json.Marshal(toolChoice[0])

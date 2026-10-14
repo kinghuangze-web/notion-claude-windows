@@ -1,0 +1,6 @@
+# Optional: copy to tools.local.ps1 and set only paths needing an override.
+# tools.local.ps1 is ignored by Git and never included in a release package.
+# $ProjectGo = 'D:\Apps\Go\bin\go.exe'
+# $ProjectPython = 'D:\Apps\Python\python.exe'
+# $ProjectClaude = 'D:\Apps\Claude\claude.exe'
+# $ProjectBash = 'D:\Apps\Git\bin\bash.exe'
