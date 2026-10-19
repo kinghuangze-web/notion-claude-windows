@@ -20,6 +20,7 @@ THIRD_PARTY_NOTICES.md
 docs/ACCEPTANCE.md
 docs/ACCOUNT_IMPORT.md
 docs/AGENT_SETUP.md
+docs/CC_SWITCH.md
 docs/CLEANUP.md
 docs/DEVELOPMENT.md
 docs/DEVLOG.md
@@ -57,6 +58,7 @@ scripts/setup.ps1
 scripts/test_cleanup.ps1
 scripts/test_full_lifecycle.py
 scripts/test_full_mode.py
+scripts/test_gateway_environment.py
 scripts/test_launcher.py
 scripts/test_lifecycle.py
 scripts/test_patches.py

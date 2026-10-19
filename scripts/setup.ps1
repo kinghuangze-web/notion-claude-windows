@@ -61,4 +61,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Readiness state checks failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Full-mode launcher checks failed.' }
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_patches.py -v
 if ($LASTEXITCODE -ne 0) { throw 'Patch install and upgrade checks failed.' }
+& .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_gateway_environment.py -v
+if ($LASTEXITCODE -ne 0) { throw 'Ordinary route activation checks failed.' }
 Write-Output 'Setup complete. Start-Gateway.cmd starts the dashboard; import a Notion account locally before inference.'

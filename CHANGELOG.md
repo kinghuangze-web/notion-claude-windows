@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.1 — 2026-10-19
+
+- Bridge the ordinary CC Switch / Claude command path: the existing dashboard gateway can opt into persistent V2 transport with proxy.agent_session_v2=true.
+- Keep the same API address, account and Key; clear inherited session directories unless explicitly enabled, with focused regression checks.
+- Verify the installed 2.1.303 CLI in the actual user working directory, auto mode, without launcher or routing overrides: reply plus resumed Read/Write/Edit/Read, six successful upstream turns in one thread.
+- Document the previous deployment gap between the isolated V2 entry and the user's still-running V1 provider.
+
 ## 2.0.0 — 2026-10-19
 
 - Add an independent native-framework Claude Code entry on 8082; retain the original slim entry and 8081 account management.

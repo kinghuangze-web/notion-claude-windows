@@ -24,6 +24,8 @@ V2 新增会话复用、完整模式入口和大型 MCP 工具目录；旧精简
 
 项目已有非交互安装、启动和验收脚本。新增 `doctor.ps1` 返回依赖检查 JSON，`project.ps1 -Action ready` 返回当前阶段和退出码。具体命令及状态处理见 [Agent 执行流程](docs/AGENT_SETUP.md)。`.cmd` 包装器供人工双击使用，Agent 直接运行 `.ps1`，避免 pause 等待。
 
+如果你使用 **CC Switch 切到 Notion，然后在任意目录直接运行 Claude**，请按 [普通命令接入](docs/CC_SWITCH.md) 升级并启用实际 8081 网关。独立 V2 入口测通不会自动改变旧供应商；普通路径已另用 Claude Code 2.1.303、auto 模式和真实文件工具验证。
+
 ## 手动开始使用
 
 1. 准备 Windows x64、Git for Windows、Go 1.26+、Python 3.11+、原生 Claude Code CLI。先在自己的 Notion 工作区确认 AI 能用，且可选择 Opus 5.5。

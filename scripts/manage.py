@@ -104,6 +104,25 @@ def owned_process():
     return record
 
 
+def gateway_environment():
+    child_env = os.environ.copy()
+    # The project config is the only source for routing, logging and accounts.
+    for name in ("HOST", "PORT", "API_KEY", "ACCOUNTS_DIR", "TOKEN_FILE", "LOG_FILE",
+                 "DEBUG_LOGGING", "API_LOG_INPUT", "API_LOG_OUTPUT", "NOTION_LOG_REQUEST",
+                 "NOTION_LOG_RESPONSE", "DUMP_API_INPUT", "AGENT_THREAD", "NOTION_API_BASE",
+                 "DEFAULT_MODEL", "NOTION_PROXY", "INFERENCE_TIMEOUT", "API_TIMEOUT",
+                 "TLS_DIAL_TIMEOUT", "NOTION_TOKEN_V2"):
+        child_env.pop(name, None)
+    for name in list(child_env):
+        if name.startswith(("NOTION_TOKEN_V2_", "NOTION_SPACE_ID", "NOTION_ACTIVE_USER_ID",
+                            "NOTION_EXPECTED_EMAIL")):
+            child_env.pop(name, None)
+    child_env.pop("NOTION_AGENT_SESSION_DIR", None)
+    if config().get("proxy", {}).get("agent_session_v2") is True:
+        child_env["NOTION_AGENT_SESSION_DIR"] = str(RUNTIME / "agent-sessions-v2")
+    return child_env
+
+
 def start():
     if not EXE.is_file():
         raise RuntimeError("Windows gateway executable has not been built.")
@@ -119,18 +138,7 @@ def start():
     port = int(config()["server"]["port"])
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", port))
-    child_env = os.environ.copy()
-    # The project config is the only source for routing, logging and accounts.
-    for name in ("HOST", "PORT", "API_KEY", "ACCOUNTS_DIR", "TOKEN_FILE", "LOG_FILE",
-                 "DEBUG_LOGGING", "API_LOG_INPUT", "API_LOG_OUTPUT", "NOTION_LOG_REQUEST",
-                 "NOTION_LOG_RESPONSE", "DUMP_API_INPUT", "AGENT_THREAD", "NOTION_API_BASE",
-                 "DEFAULT_MODEL", "NOTION_PROXY", "INFERENCE_TIMEOUT", "API_TIMEOUT",
-                 "TLS_DIAL_TIMEOUT", "NOTION_TOKEN_V2"):
-        child_env.pop(name, None)
-    for name in list(child_env):
-        if name.startswith(("NOTION_TOKEN_V2_", "NOTION_SPACE_ID", "NOTION_ACTIVE_USER_ID",
-                            "NOTION_EXPECTED_EMAIL")):
-            child_env.pop(name, None)
+    child_env = gateway_environment()
     log_path = ROOT / "logs" / "gateway.log"
     with log_path.open("ab") as output:
         process = subprocess.Popen(
