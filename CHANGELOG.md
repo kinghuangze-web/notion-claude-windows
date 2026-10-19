@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.0 — 2026-10-19
+
+- Add an independent native-framework Claude Code entry on 8082; retain the original slim entry and 8081 account management.
+- Persist Notion thread bindings, submit incremental turns, deduplicate retries, reject history branches and recover accepted pending events without replacement chats.
+- Preserve native prompt/tool registration and inherit existing Skills/plugin discovery in isolated local routing state.
+- Keep all MCP actions discoverable and supply exact schemas on demand to address large dynamic registries and HTTP 413.
+- Add portable install/upgrade patches, full-mode acceptance with optional independent MCP HMAC proof, process ownership records and junction-safe cleanup.
+- Publish the implementation plan, development log, corrected workspace/quota diagnosis and scoped V2 verification; keep all private runtime evidence local.
+- Selected live V2 behaviors passed; complete Anthropic API semantics and every registered tool remain unverified.
+
 ## 1.0.1 — 2026-10-14
 
 - Make the README start with the Agent execution path; retain manual Windows entry points.

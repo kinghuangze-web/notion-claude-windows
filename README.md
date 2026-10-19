@@ -1,13 +1,14 @@
 # notion-claude-windows
 
-在 Windows 上将自己的 Notion AI 接入 Claude Code CLI，用固定 Opus 5.5 完成本地文字文件任务。
+在 Windows 上将自己的 Notion AI 接入 Claude Code CLI，以官方 CLI 框架、默认提示词、原生 Skills 和工具运行本地任务。
 
-本项目提供固定版本安装、Opus 5.5 适配、独立启动器、验收和清理脚本。它是基于 [notion_manager](https://github.com/SleepingBag945/notion_manager) 实验性 Agent 通道的 Windows 复现工具包。Notion AI 返回回答和工具指令，Claude Code 在电脑上执行工具。
+V2 新增会话复用、完整模式入口和大型 MCP 工具目录；旧精简入口继续保留。本项目提供固定版本安装、Opus 5.5 适配、独立启动器、验收和清理脚本。它是基于 [notion_manager](https://github.com/SleepingBag945/notion_manager) 实验性 Agent 通道的 Windows 复现工具包。Notion AI 返回回答和工具指令，Claude Code 在电脑上执行工具。
 
 ```text
-Claude Code CLI → 本机网关 127.0.0.1:8081 → Notion AI / Opus 5.5
-      ↑                   ← 回答或工具指令 ←
-      └─ 本机执行 Bash / Read / Edit，再提交工具结果
+官方 Claude Code CLI → V2 网关 127.0.0.1:8082 → Notion AI / Opus 5.5
+      ↑                     ← 同线程续写/工具指令 ←
+      └─ 本机执行原生工具 / Skill / MCP，再提交结果
+账号管理与旧精简入口：127.0.0.1:8081
 ```
 
 ## 交给 Agent 执行
@@ -18,7 +19,7 @@ Claude Code CLI → 本机网关 127.0.0.1:8081 → Notion AI / Opus 5.5
 在 Windows 的 D 盘独立目录部署 https://github.com/kinghuangze-web/notion-claude-windows 。
 先读取 AGENTS.md 和 docs/AGENT_SETUP.md，检查依赖，执行固定版本安装、启动和本地检查。
 账号未导入时，给出本机管理页地址及 token_v2 获取步骤，等我本人在本机导入；不要让我把凭证发到聊天。
-导入后继续五项真实验收，核对实际文件和上游模型确认。不要修改全局供应商配置，保留清理入口和失败证据。
+导入后使用 V2 Full-Claude 入口并运行 acceptance-full.ps1 -Run，核对原生 Skill、真实文件、上游模型与单线程复用；需要时加 -Mcp。不要修改全局供应商配置，保留清理入口和失败证据。
 ```
 
 项目已有非交互安装、启动和验收脚本。新增 `doctor.ps1` 返回依赖检查 JSON，`project.ps1 -Action ready` 返回当前阶段和退出码。具体命令及状态处理见 [Agent 执行流程](docs/AGENT_SETUP.md)。`.cmd` 包装器供人工双击使用，Agent 直接运行 `.ps1`，避免 pause 等待。
@@ -30,8 +31,8 @@ Claude Code CLI → 本机网关 127.0.0.1:8081 → Notion AI / Opus 5.5
 3. 双击 `Setup.cmd`。脚本取得固定上游提交、应用补丁、下载依赖、编译并检查。初次安装需要访问 GitHub、Go 模块服务和 PyPI。
 4. 双击 `Start-Gateway.cmd`，在 Chrome 打开 `http://127.0.0.1:8081/dashboard/`。管理密码在本机 `runtime\private\admin-password.txt`。
 5. **本人获取并导入 `token_v2`**：在已登录 Notion 的 Chrome 页面按 `F12` 或 `Ctrl + Shift + I`，选择 `Application（应用）→ Storage（存储）→ Cookies → 当前 Notion 域名`，在 Name 列找到 `token_v2`，复制这一行完整的 **Value**，直接粘贴到本机管理页“添加账号”的输入框。看不到 Application 时点击顶部 `»`；[完整位置说明与排错](docs/ACCOUNT_IMPORT.md)。核对账号和工作区，再用 `Status.cmd` 确认 `usable_accounts` 至少为 1。
-6. 双击 `Claude-Code.cmd`，从项目的 `demo` 目录开始测试。默认请求 `claude-opus-5-5`，不降级到 Auto。
-7. 按 [验收教程](docs/ACCEPTANCE.md) 执行三个小任务，或双击 `Acceptance.cmd` 运行五项真实验收。真实验收会使用 Notion AI 额度。
+6. 双击 `Full-Claude.cmd` 使用 V2，从项目的 `demo` 目录开始测试。默认请求 `claude-opus-5-5`，不降级到 Auto。已有版本先停止网关并重新 Setup；[升级与使用](docs/FULL_MODE.md)。
+7. 双击 `Acceptance-Full.cmd` 验证原生 Skill、Read/Write/Edit 与单线程复用，或按 [V2 教程](docs/FULL_MODE.md) 加测真实 MCP。验收会使用 Notion AI 额度。旧 `Acceptance.cmd` 仍是 V1 五项套件。
 
 首次安装的具体下载选项、命令与成功标志见 [Windows 安装教程](docs/INSTALL_WINDOWS.md)。Cookie 操作见 [账号导入](docs/ACCOUNT_IMPORT.md)。
 
@@ -59,7 +60,10 @@ Claude Code CLI → 本机网关 127.0.0.1:8081 → Notion AI / Opus 5.5
 |---|---|
 | `Setup.cmd` | 安装项目依赖、取得固定源码、应用补丁、编译和检查 |
 | `Start-Gateway.cmd` | 启动或复用属于本项目的网关 |
-| `Claude-Code.cmd` | 使用固定 Opus 5.5 启动独立 CLI |
+| `Full-Claude.cmd` | V2：官方默认提示词、原生工具和 Skills，自动启动独立 8082 网关 |
+| `Claude-Code.cmd` | V1：保留原 Bash/Read/Edit 精简入口 |
+| `Acceptance-Full.cmd` | V2 原生 Skill、文件、模型确认与单线程验收 |
+| `Stop-Full-Gateway.cmd` | 停止属于本项目的 V2 网关 |
 | `Status.cmd` | 显示脱敏状态和可用账号数 |
 | `Acceptance.cmd` | 五项实际推理与工具验收 |
 | `Stop-Gateway.cmd` | 按 PID、exe、启动时间停止本项目网关 |
@@ -71,9 +75,11 @@ Claude Code CLI → 本机网关 127.0.0.1:8081 → Notion AI / Opus 5.5
 
 补丁每次从当前账号的实时模型列表查找 Opus 5.5，显式提交模型 ID，再核对 Notion 返回的 `model`、`selectedModel` 和线程 ID。缺字段、不匹配、型号不可用或请求 Auto，均报错；不会静默降级。实现见 [模型适配](docs/MODEL_AND_LIMITS.md)。
 
-已通过本地 CLI 实测：对话、创建七个中文目录、文件创建与 Read 读回、随机标记盲读、读取 SKILL.md 后执行文件任务。固定模型的依据是 Notion 服务端报告的选择，未独立检查后端模型权重。验证范围见 [验证记录](docs/VALIDATION.md)。
+V2 真实试验通过原生 Skill、连续 Read → Write → Edit → Read、独立 MCP HMAC 和恢复；同一个 CLI 会话 18 个成功上游回合只创建 1 个 Notion 对话。初始 23 项工具、21 项 Skill，动态观察到 252 项总工具，不代表每个工具都执行过。固定模型依据为 Notion 服务端报告，未独立检查后端权重。[V2 验证范围](docs/VALIDATION_V2.md)。
 
-当前精简模式在验收版本中实际提供 Bash、Read、Edit；不自动加载全局配置、插件或外部 MCP。完整插件、MCP、Cowork、原生 Skill 命令、图片/PDF 附件、1M 上下文和长会话稳定性没有纳入本次验收。
+V2 保留官方 CLI 框架和默认提示词，但上游消息仍经过 Notion 文本协议；全部原生角色语义、所有插件/MCP、附件、长上下文压缩和长期并发没有等价认证。新会话通常仍生成一个可见 Notion 对话，旧聊天不会自动删除。旧精简入口的限制与历史证据见 [模型边界](docs/MODEL_AND_LIMITS.md) 和 [V1 验证](docs/VALIDATION.md)。
+
+更新方案与开发过程见 [V2 方案](docs/V2_PLAN.md)、[开发日志](docs/DEVLOG.md)。公开包安装/生命周期检查和先前隔离环境真实推理分开记录，不把本地健康检查当作账号已通过推理。
 
 ## 隐私与清理
 

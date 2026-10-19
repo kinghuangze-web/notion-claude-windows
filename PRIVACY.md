@@ -8,6 +8,8 @@
 
 CLI 的任务、所读文件和工具结果会经过本机网关发给 Notion。启动器独立数据目录不会自动阻止工具访问其他路径；明确任务范围，先在 demo 验收。
 
+V2 将已有用户发现目录通过 Junction 接入本机独立配置，复制普通 settings/CLAUDE.md 和用户 MCP 注册配置，不复制登录/OAuth 文件。MCP 注册或 settings 内嵌的私有环境变量仍可能被复制到 runtime/full，不能据此认为该目录无秘密。
+
 ## 哪些内容不公开
 
 - runtime、账号、Cookie、API Key、管理密码、真实 config.yaml。

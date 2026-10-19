@@ -1,5 +1,7 @@
 # 模型适配与能力边界
 
+以下保留 V1 精简模式的实现或历史验证。V2 使用独立完整入口，见 [V2 使用](FULL_MODE.md)、[V2 验证](VALIDATION_V2.md)；不要把 V1 的限制或样例通过自动套到 V2。
+
 ## 固定 Opus 5.5 的实现
 
 公开基础提交的 Agent 通道采用 Auto，本工具包在该提交上应用 `patches/opus55.patch`：

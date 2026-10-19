@@ -14,7 +14,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\cleanup.ps1 -E
 
 保留发布源码（scripts/patches）、文档、许可证、logs 和 evidence。日志/证据可能包含任务内容或个人路径，虽然不进入 Git，保留它们仍需本人管理；整项目清理会一并删除。
 
-清理不用 Python 或 Go，因此依赖安装失败或 .venv 已丢失时仍可运行。会先检查项目标记、绝对目标和符号链接，再检查进程归属；已记录的本项目 CLI 会话还在运行时停止清理。网关只在 PID、exe 和启动时间匹配时停止。
+清理不用 Python 或 Go，因此依赖安装失败或 .venv 已丢失时仍可运行。会先检查项目标记、绝对目标和符号链接，再检查进程归属；已记录的本项目 CLI 会话还在运行时停止清理。两个网关只在 PID、exe 和启动时间匹配时停止。V2 的五个已知发现目录 Junction 只解除叶节点链接，保留用户 .claude 原目录；其他重定向路径继续拒绝。
 
 ## 整个项目都不要
 

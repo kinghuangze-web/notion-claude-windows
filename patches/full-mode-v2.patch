@@ -1,0 +1,947 @@
+diff --git a/internal/proxy/agent_thread.go b/internal/proxy/agent_thread.go
+--- a/internal/proxy/agent_thread.go
++++ b/internal/proxy/agent_thread.go
+@@ -20,6 +20,7 @@
+ type agentTranscriptPage struct {
+ 	Type            string `json:"type"`
+ 	HasMoreBackward bool   `json:"has_more_backward"`
++	HasMoreForward  bool   `json:"has_more_forward"`
+ 	Session         struct {
+ 		Status string `json:"status"`
+ 	} `json:"session"`
+@@ -30,10 +31,11 @@
+ 	} `json:"patches"`
+ }
+ type agentTranscriptEntity struct {
+-	ID         string `json:"id"`
+-	Kind       string `json:"kind"`
+-	Sequence   int    `json:"sequence"`
+-	StopReason string `json:"stop_reason"`
++	UserText   json.RawMessage `json:"text"`
++	ID         string          `json:"id"`
++	Kind       string          `json:"kind"`
++	Sequence   float64         `json:"sequence"`
++	StopReason string          `json:"stop_reason"`
+ 	Content    []struct {
+ 		Type string `json:"type"`
+ 		Text string `json:"text"`
+@@ -146,6 +148,15 @@
+ 	if len(opt.Attachments) > 0 {
+ 		return fmt.Errorf("Notion Agent transport does not support attachments")
+ 	}
++	if agentSessionEnabled() {
++		key := ""
++		var registry []Tool
++		if opt.Session != nil {
++			key = opt.Session.AgentSessionKey
++			registry = opt.Session.AgentSessionTools
++		}
++		return callAgentSession(acc, messages, model, notionModel, key, cb, getChromeHTTPClient(AppConfig.InferenceTimeoutDuration()), registry)
++	}
+ 	return callAgentThreadWithSelection(acc, messages, model, notionModel, cb, getChromeHTTPClient(AppConfig.InferenceTimeoutDuration()))
+ }
+ 
+diff --git a/internal/proxy/anthropic.go b/internal/proxy/anthropic.go
+--- a/internal/proxy/anthropic.go
++++ b/internal/proxy/anthropic.go
+@@ -813,6 +813,13 @@
+ 			log.Printf("[upload-debug] extracted %d file attachment(s) from request", len(fileAttachments))
+ 		}
+ 		sessionSalt := extractAnthropicSessionSalt(req.Metadata)
++		if agentSessionEnabled() {
++			nativeRoles := map[string]int{}
++			for _, m := range messages {
++				nativeRoles[m.Role]++
++			}
++			log.Printf("[agent-v2] native_message_roles=%v", nativeRoles)
++		}
+ 		if sessionSalt != "" {
+ 			log.Printf("[session] extracted metadata session salt %s", truncateForLog(sessionSalt, 8))
+ 		}
+@@ -862,6 +869,9 @@
+ 
+ 		if !isResearcher {
+ 			fingerprint = computeSessionFingerprintForRequest(messages, sessionSalt, resolvedModel)
++			if agentSessionEnabled() {
++				fingerprint = agentSessionFingerprint(messages, sessionSalt, resolvedModel)
++			}
+ 			session = globalSessionManager.Get(fingerprint)
+ 			rawMsgCount = countNonSystemMessages(messages)
+ 
+@@ -907,7 +917,9 @@
+ 			// Injecting them as custom tools causes the model to generate JSON tool calls
+ 			// instead of using Notion's server-side search which actually executes.
+ 			var toolDetectedWebSearch bool
+-			convertedTools, toolDetectedWebSearch = filterNativeSearchTools(convertedTools)
++			if !agentSessionEnabled() {
++				convertedTools, toolDetectedWebSearch = filterNativeSearchTools(convertedTools)
++			}
+ 			if toolDetectedWebSearch {
+ 				enableWebSearch = true
+ 				log.Printf("[bridge] WebSearch/WebFetch detected — enabling Notion native search, stripping history")
+@@ -1019,7 +1031,7 @@
+ 			}
+ 
+ 			requestMessages := attemptMessages
+-			if !isResearcher && isFirstTurn {
++			if !isResearcher && isFirstTurn && !agentSessionEnabled() {
+ 				switch {
+ 				case len(toolRecoveryMessages) > 0:
+ 					requestMessages = cloneChatMessages(toolRecoveryMessages)
+@@ -1051,6 +1063,11 @@
+ 				} else {
+ 					currentSession = session
+ 				}
++			}
++
++			if currentSession != nil && agentSessionEnabled() {
++				currentSession.AgentSessionKey = fingerprint
++				currentSession.AgentSessionTools = convertedTools
+ 			}
+ 
+ 			log.Printf("[req] %s model=%s messages=%d stream=%v tools=%d attachments=%d account=%s session=%v (attempt %d/%d) [anthropic]",
+diff --git a/internal/proxy/session.go b/internal/proxy/session.go
+--- a/internal/proxy/session.go
++++ b/internal/proxy/session.go
+@@ -13,11 +13,13 @@
+ // Session represents an active multi-turn conversation mapped to a Notion thread.
+ // A thread is bound to the account that created it — subsequent turns must use the same account.
+ type Session struct {
+-	ThreadID     string // Notion threadId (generated on first turn, reused)
+-	TurnCount    int    // completed conversation turns (user+assistant pairs)
+-	AccountEmail string // bound account (thread is tied to the creating account)
+-	CreatedAt    time.Time
+-	LastUsedAt   time.Time
++	AgentSessionTools []Tool
++	AgentSessionKey   string // V2 persistent conversation identity
++	ThreadID          string // Notion threadId (generated on first turn, reused)
++	TurnCount         int    // completed conversation turns (user+assistant pairs)
++	AccountEmail      string // bound account (thread is tied to the creating account)
++	CreatedAt         time.Time
++	LastUsedAt        time.Time
+ 
+ 	// Reused transcript entry IDs (generated on first turn, reused on subsequent turns)
+ 	ConfigID  string
+diff --git a/internal/proxy/tools.go b/internal/proxy/tools.go
+--- a/internal/proxy/tools.go
++++ b/internal/proxy/tools.go
+@@ -81,7 +81,7 @@
+ 			Parameters:  params,
+ 		})
+ 	}
+-	data, _ := json.MarshalIndent(funcs, "", "  ")
++	data, _ := json.Marshal(funcs)
+ 	return fmt.Sprintf("## Functions\n```json\n%s\n```", string(data))
+ }
+ 
+@@ -411,7 +411,11 @@
+ 	if AppConfig != nil && AppConfig.Proxy.AgentThread &&
+ 		(strings.EqualFold(model, "auto") || strings.EqualFold(model, "opus-5.5") ||
+ 			strings.EqualFold(model, "claude-opus-5-5") || strings.EqualFold(model, "claude-opus-5.5")) {
+-		prompt := "LOCAL ACTION PROTOCOL\nThe local client executes the following actions on the user's computer. Emit only a JSON object {\"name\":\"function_name\",\"arguments\":{...}} to request an action, with actual arguments matching its schema. Do not try Notion's hosted filesystem or shell for these paths. Wait for the returned local tool message before claiming a result. Never invent results. If no action is needed, reply normally.\n" + buildOpenAIToolsBlock(tools)
++		definitions := buildOpenAIToolsBlock(tools)
++		if agentSessionEnabled() {
++			definitions = buildAgentActionCatalog(tools)
++		}
++		prompt := "LOCAL ACTION PROTOCOL\nThe local client executes the following actions on the user's computer. Emit only a JSON object {\"name\":\"function_name\",\"arguments\":{...}} to request an action, with actual arguments matching its schema. Do not try Notion's hosted filesystem or shell for these paths. Wait for the returned local tool message before claiming a result. Never invent results. If no action is needed, reply normally.\n" + definitions
+ 		if len(toolChoice) > 0 && toolChoice[0] != nil {
+ 			choice, _ := json.Marshal(toolChoice[0])
+ 			prompt += "\nTool choice requested by the local client: " + string(choice) + ". Honor none (no action), required/any (request an action), or a named function/tool (request that action); auto permits normal text or an action.\n"
+diff --git a/internal/proxy/agent_session_v2.go b/internal/proxy/agent_session_v2.go
+new file mode 100644
+--- /dev/null
++++ b/internal/proxy/agent_session_v2.go
+@@ -0,0 +1,435 @@
++package proxy
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"io"
++	"log"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"time"
++)
++
++// V2 is explicitly enabled per process, leaving the existing gateway unchanged.
++func agentSessionEnabled() bool { return os.Getenv("NOTION_AGENT_SESSION_DIR") != "" }
++
++func agentHash(v interface{}) string {
++	b, _ := json.Marshal(v)
++	h := sha256.Sum256(b)
++	return hex.EncodeToString(h[:])
++}
++
++// Keep parent and child tasks separate even when CC shares metadata.session_id.
++func agentSessionFingerprint(messages []ChatMessage, salt, model string) string {
++	first := ""
++	for _, m := range messages {
++		if isMeaningfulUserMessage(m) {
++			first = normalizeSessionUserContent(m.Content)
++			break
++		}
++	}
++	return agentHash([]string{salt, model, first})
++}
++
++type agentPending struct {
++	Hash       string
++	EventID    string
++	Baseline   float64
++	Attempted  bool
++	Accepted   bool
++	History    []string
++	SystemHash string
++	SystemSeen []string
++}
++type agentSessionState struct {
++	Version           int
++	ThreadID          string
++	Account           string
++	Model             string
++	Confirmed         bool
++	Sequence          float64
++	History           []string
++	SystemHash        string
++	SystemSeen        []string
++	LastHash          string
++	Answer            string
++	Pending           *agentPending
++	SchemaRequestHash string
++	SchemaRounds      int
++}
++
++var agentSessionLocks sync.Map
++
++func saveAgentState(path string, state *agentSessionState) error {
++	b, err := json.MarshalIndent(state, "", "  ")
++	if err != nil {
++		return err
++	}
++	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
++		return err
++	}
++	f, err := os.CreateTemp(filepath.Dir(path), ".agent-session-*.tmp")
++	if err != nil {
++		return err
++	}
++	temp := f.Name()
++	defer os.Remove(temp)
++	if err = f.Chmod(0600); err == nil {
++		_, err = f.Write(b)
++	}
++	if err == nil {
++		err = f.Sync()
++	}
++	closeErr := f.Close()
++	if err != nil {
++		return err
++	}
++	if closeErr != nil {
++		return closeErr
++	}
++	return os.Rename(temp, path)
++}
++
++func agentRequestParts(messages []ChatMessage) (history []string, systemHash string, nonSystem []ChatMessage) {
++	var system []ChatMessage
++	for _, m := range messages {
++		if m.Role == "system" {
++			m.Content = normalizeSessionSystemContent(m.Content)
++			system = append(system, m)
++		} else {
++			nonSystem = append(nonSystem, m)
++			history = append(history, agentHash(m))
++		}
++	}
++	return history, agentHash(system), nonSystem
++}
++
++func agentSystemDelta(messages []ChatMessage, previous []string) ([]ChatMessage, []string) {
++	seen := make(map[string]bool)
++	all := append([]string(nil), previous...)
++	for _, h := range previous {
++		seen[h] = true
++	}
++	var delta []ChatMessage
++	for _, m := range messages {
++		if m.Role != "system" {
++			continue
++		}
++		normalized := m
++		normalized.Content = normalizeSessionSystemContent(m.Content)
++		h := agentHash(normalized)
++		if !seen[h] {
++			delta = append(delta, m)
++			all = append(all, h)
++			seen[h] = true
++		}
++	}
++	return delta, all
++}
++
++type agentHTTPError struct {
++	Status   int
++	Endpoint string
++}
++
++func (e *agentHTTPError) Error() string {
++	return fmt.Sprintf("Agent %s HTTP %d; pending event retained", e.Endpoint, e.Status)
++}
++
++// Parse only events after the previous completed turn. Old idle/end_turn events
++// cannot satisfy a new inference, and old answers cannot leak into its output.
++func readAgentTranscriptAfter(page agentTranscriptPage, after float64) (string, bool, float64, error) {
++	if page.HasMoreForward {
++		return "", false, after, fmt.Errorf("new Agent turn exceeds one page; refusing truncated output")
++	}
++	filtered := page
++	filtered.Patches = nil
++	filtered.HasMoreBackward = false // forward query intentionally excludes older turns
++	seq := after
++	for _, p := range page.Patches {
++		if p.Op == "put" && p.Entity.Sequence > after {
++			filtered.Patches = append(filtered.Patches, p)
++			if p.Entity.Sequence > seq {
++				seq = p.Entity.Sequence
++			}
++		}
++	}
++	text, done, err := readAgentTranscript(filtered)
++	return text, done, seq, err
++}
++
++func pollAgentPending(ctx context.Context, post func(string, interface{}, interface{}) error, acc *Account, state *agentSessionState, path string) (string, error) {
++	pending := state.Pending
++	if pending == nil || !state.Confirmed {
++		return "", fmt.Errorf("unconfirmed Agent create; no replacement conversation created")
++	}
++	query := map[string]interface{}{"spaceId": acc.SpaceID, "threadId": state.ThreadID, "direction": "forward", "afterSequence": pending.Baseline, "limit": 100}
++	for {
++		var page agentTranscriptPage
++		if err := post("getThreadTranscript", query, &page); err != nil {
++			return "", err
++		}
++		text, done, seq, err := readAgentTranscriptAfter(page, pending.Baseline)
++		if err != nil {
++			return "", err
++		}
++		if done {
++			if strings.TrimSpace(text) == "" {
++				return "", ErrEmptyResponse
++			}
++			state.Sequence, state.History, state.SystemHash = seq, pending.History, pending.SystemHash
++			state.SystemSeen = pending.SystemSeen
++			state.LastHash, state.Answer, state.Pending = pending.Hash, text, nil
++			if err = saveAgentState(path, state); err != nil {
++				return "", err
++			}
++			log.Printf("[agent-v2] completed requested=%s thread_sha256=%s sequence=%.1f", state.Model, agentHash(state.ThreadID), seq)
++			return text, nil
++		}
++		timer := time.NewTimer(500 * time.Millisecond)
++		select {
++		case <-ctx.Done():
++			timer.Stop()
++			return "", fmt.Errorf("Agent inference deadline; event retained for resume: %w", ctx.Err())
++		case <-timer.C:
++		}
++	}
++}
++
++func callAgentSession(acc *Account, messages []ChatMessage, alias, model, key string, cb StreamCallback, client *http.Client, toolRegistry ...[]Tool) error {
++	if key == "" {
++		return fmt.Errorf("persistent Agent transport requires a conversation key")
++	}
++	if model == "" {
++		return fmt.Errorf("persistent Agent transport requires an explicit confirmed model")
++	}
++	dir := os.Getenv("NOTION_AGENT_SESSION_DIR")
++	path := filepath.Join(dir, agentHash(key)+".json")
++	lock, _ := agentSessionLocks.LoadOrStore(path, &sync.Mutex{})
++	mu := lock.(*sync.Mutex)
++	mu.Lock()
++	defer mu.Unlock()
++	owner := agentHash([]string{acc.UserID, acc.UserEmail, acc.SpaceID})
++	state := agentSessionState{Version: 1, Account: owner, Model: model}
++	b, err := os.ReadFile(path)
++	if err == nil {
++		if json.Unmarshal(b, &state) != nil || state.Version != 1 || state.ThreadID == "" {
++			return fmt.Errorf("invalid persisted Agent state; refusing replacement thread")
++		}
++	} else if !os.IsNotExist(err) {
++		return fmt.Errorf("cannot read persisted Agent state")
++	}
++	if state.Account != owner || state.Model != model {
++		return fmt.Errorf("Agent conversation is bound to another account/workspace/model; refusing silent reroute")
++	}
++	requestHash := agentHash(messages)
++	var tools []Tool
++	if len(toolRegistry) > 0 {
++		tools = toolRegistry[0]
++	}
++	if state.SchemaRequestHash != requestHash {
++		state.SchemaRequestHash = requestHash
++		state.SchemaRounds = 0
++	}
++	history, systemHash, nonSystem := agentRequestParts(messages)
++	timeout := AppConfig.InferenceTimeoutDuration()
++	if timeout <= 0 {
++		return fmt.Errorf("Agent inference timeout must be positive")
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), timeout)
++	defer cancel()
++	post := func(endpoint string, body, result interface{}) error {
++		data, e := json.Marshal(body)
++		if e != nil {
++			return e
++		}
++		req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(NotionAPIBase, "/")+"/"+endpoint, bytes.NewReader(data))
++		if e != nil {
++			return e
++		}
++		setNotionHeadersJSON(req, acc)
++		resp, e := client.Do(req)
++		if e != nil {
++			return fmt.Errorf("Agent %s: %w", endpoint, e)
++		}
++		defer resp.Body.Close()
++		if resp.StatusCode != 200 {
++			return &agentHTTPError{Status: resp.StatusCode, Endpoint: endpoint}
++		}
++		rd, cleanup, e := decompressBody(resp)
++		if e != nil {
++			return e
++		}
++		if cleanup != nil {
++			defer cleanup()
++		}
++		if result == nil {
++			_, e = io.Copy(io.Discard, io.LimitReader(rd, 8<<20))
++			return e
++		}
++		if e = json.NewDecoder(io.LimitReader(rd, 8<<20)).Decode(result); e != nil {
++			return fmt.Errorf("invalid Agent %s response: %w", endpoint, e)
++		}
++		return nil
++	}
++	resolveSchemas := func(answer string) (string, error) {
++		for {
++			name, isSchema := agentRequestedSchema(answer)
++			if !isSchema {
++				return answer, nil
++			}
++			if state.SchemaRounds >= 8 {
++				return "", fmt.Errorf("action-schema resolution budget exhausted")
++			}
++			text, e := agentExactSchema(tools, name)
++			if e != nil {
++				return "", e
++			}
++			state.SchemaRounds++
++			state.Pending = &agentPending{Hash: requestHash, EventID: generateUUIDv4(), Baseline: state.Sequence, Attempted: true, History: state.History, SystemHash: state.SystemHash, SystemSeen: state.SystemSeen}
++			if e = saveAgentState(path, &state); e != nil {
++				return "", e
++			}
++			body := map[string]interface{}{"spaceId": acc.SpaceID, "threadId": state.ThreadID, "clientEventId": state.Pending.EventID, "model": model, "reasoningEffort": "medium", "browserEnabled": false, "policies": map[string]string{"approval_mode": "ask"}, "event": map[string]interface{}{"type": "user.message", "content": []interface{}{map[string]interface{}{"type": "text", "text": [][]string{{text}}}}}}
++			if e = post("sendEventToAgentThread", body, nil); e != nil {
++				return "", e
++			}
++			state.Pending.Accepted = true
++			if e = saveAgentState(path, &state); e != nil {
++				return "", e
++			}
++			log.Printf("[agent-v2] exact_schema_supplied action=%s thread_sha256=%s", name, agentHash(state.ThreadID))
++			answer, e = pollAgentPending(ctx, post, acc, &state, path)
++			if e != nil {
++				return "", e
++			}
++		}
++	}
++	if state.Pending == nil && state.LastHash == requestHash {
++		answer, e := resolveSchemas(state.Answer)
++		if e != nil {
++			return e
++		}
++		cb(answer, false, nil)
++		cb("", true, nil)
++		return nil
++	}
++	if state.Pending != nil && state.Pending.Hash != requestHash {
++		if len(history) < len(state.Pending.History) {
++			return fmt.Errorf("unresolved Agent request conflicts with a rolled-back history")
++		}
++		for i, h := range state.Pending.History {
++			if history[i] != h {
++				return fmt.Errorf("unresolved Agent request belongs to another conversation branch")
++			}
++		}
++		// Reconcile a response lost during client disconnect before appending the
++		// newly resumed turn. Neither the accepted event nor the chat is duplicated.
++		if _, err = pollAgentPending(ctx, post, acc, &state, path); err != nil {
++			return err
++		}
++	}
++	if state.Pending == nil && state.LastHash != "" && len(history) == len(state.History) && systemHash == state.SystemHash {
++		equal := true
++		for i, h := range history {
++			if state.History[i] != h {
++				equal = false
++				break
++			}
++		}
++		if equal {
++			answer, e := resolveSchemas(state.Answer)
++			if e != nil {
++				return e
++			}
++			cb(answer, false, nil)
++			cb("", true, nil)
++			return nil
++		}
++	}
++	if state.Pending == nil {
++		if len(history) < len(state.History) {
++			return fmt.Errorf("Agent history rollback requires an explicit branch; refusing another thread")
++		}
++		for i, h := range state.History {
++			if history[i] != h {
++				return fmt.Errorf("Agent history diverged; refusing to mix conversation branches")
++			}
++		}
++		if state.ThreadID == "" {
++			state.ThreadID = generateUUIDv4()
++		}
++		_, allSystems := agentSystemDelta(messages, state.SystemSeen)
++		state.Pending = &agentPending{Hash: requestHash, EventID: generateUUIDv4(), Baseline: state.Sequence, History: history, SystemHash: systemHash, SystemSeen: allSystems}
++		if err = saveAgentState(path, &state); err != nil {
++			return err
++		}
++	}
++	pending := state.Pending
++	if !pending.Attempted {
++		pending.Attempted = true
++		if err = saveAgentState(path, &state); err != nil {
++			return err
++		}
++		if !state.Confirmed {
++			body := agentThreadBody(acc, messages)
++			body["threadId"], body["clientMessageId"] = state.ThreadID, pending.EventID
++			body["model"], body["reasoningEffort"] = model, "medium"
++			var created agentCreateResponse
++			if err = post("createAgentThread", body, &created); err != nil {
++				return err
++			}
++			if err = verifyAgentModelConfirmation(created, model, state.ThreadID); err != nil {
++				return err
++			}
++			state.Confirmed = true
++			log.Printf("[agent-v2] created alias=%s requested=%s confirmed=%s selected=%s thread_sha256=%s", alias, model, created.Thread.Data.AgentProvider.Model, created.Thread.Data.AgentProvider.SelectedModel, agentHash(state.ThreadID))
++		} else {
++			delta := append([]ChatMessage(nil), nonSystem[len(state.History):]...)
++			changed, _ := agentSystemDelta(messages, state.SystemSeen)
++			delta = append(changed, delta...)
++			content := []interface{}{map[string]interface{}{"type": "text", "text": [][]string{{agentThreadPrompt(delta)}}}}
++			body := map[string]interface{}{"spaceId": acc.SpaceID, "threadId": state.ThreadID, "clientEventId": pending.EventID,
++				"event": map[string]interface{}{"type": "user.message", "content": content}, "model": model, "reasoningEffort": "medium",
++				"browserEnabled": false, "policies": map[string]string{"approval_mode": "ask"}}
++			log.Printf("[agent-v2] submitting delta_bytes=%d system_changed=%v", len(agentThreadPrompt(delta)), systemHash != state.SystemHash)
++			if err = post("sendEventToAgentThread", body, nil); err != nil {
++				if response, ok := err.(*agentHTTPError); ok && (response.Status == 400 || response.Status == 413 || response.Status == 422) {
++					// A definite validation rejection did not enqueue the turn.
++					// Retain the thread; a corrected request may continue its history.
++					state.Pending = nil
++					if saveErr := saveAgentState(path, &state); saveErr != nil {
++						return saveErr
++					}
++				}
++				return err
++			}
++			log.Printf("[agent-v2] continued requested=%s thread_sha256=%s delta_messages=%d", model, agentHash(state.ThreadID), len(delta))
++		}
++		pending.Accepted = true
++		if err = saveAgentState(path, &state); err != nil {
++			return err
++		}
++	}
++	if !state.Confirmed {
++		return fmt.Errorf("Agent create outcome is ambiguous; persisted thread retained, no duplicate created")
++	}
++	text, err := pollAgentPending(ctx, post, acc, &state, path)
++	if err != nil {
++		return err
++	}
++	text, err = resolveSchemas(text)
++	if err != nil {
++		return err
++	}
++	cb(text, false, nil)
++	cb("", true, nil)
++	return nil
++}
+diff --git a/internal/proxy/agent_catalog_v2.go b/internal/proxy/agent_catalog_v2.go
+new file mode 100644
+--- /dev/null
++++ b/internal/proxy/agent_catalog_v2.go
+@@ -0,0 +1,65 @@
++package proxy
++
++import (
++	"encoding/json"
++	"fmt"
++	"strings"
++)
++
++const agentSchemaAction = "__notion_get_action_schema"
++
++// Claude Code may load hundreds of MCP schemas asynchronously. Keep every
++// action discoverable, and provide its exact unmodified schema on demand.
++// Only the adapter handles this read-only action; CC still executes real tools.
++func buildAgentActionCatalog(tools []Tool) string {
++	var inline []Tool
++	var catalog strings.Builder
++	for _, tool := range tools {
++		if !strings.HasPrefix(tool.Function.Name, "mcp__") {
++			inline = append(inline, tool)
++			continue
++		}
++		description := strings.Join(strings.Fields(tool.Function.Description), " ")
++		runes := []rune(description)
++		if len(runes) > 72 {
++			description = string(runes[:72]) + "…"
++		}
++		fmt.Fprintf(&catalog, "%s: %s\n", tool.Function.Name, description)
++	}
++	prompt := buildOpenAIToolsBlock(inline)
++	if catalog.Len() > 0 {
++		prompt += "\nAdditional available local MCP actions (all remain available):\n" + catalog.String()
++		prompt += "\nBefore first calling an action from this additional catalog, request its exact schema with the read-only adapter action {\"name\":\"" + agentSchemaAction + "\",\"arguments\":{\"name\":\"exact_action_name\"}}. The adapter will return its complete description and input schema. Then request the real action using that schema. Never invent arguments; do not execute the action in Notion's hosted tools. Previously supplied unchanged schemas remain valid.\n"
++	}
++	return prompt
++}
++
++func agentRequestedSchema(text string) (string, bool) {
++	text = strings.TrimSpace(text)
++	text = strings.TrimPrefix(text, "```json")
++	text = strings.TrimPrefix(text, "```")
++	text = strings.TrimSuffix(text, "```")
++	var request struct {
++		Name      string `json:"name"`
++		Arguments struct {
++			Name string `json:"name"`
++		} `json:"arguments"`
++	}
++	if json.Unmarshal([]byte(strings.TrimSpace(text)), &request) != nil || request.Name != agentSchemaAction {
++		return "", false
++	}
++	return request.Arguments.Name, true
++}
++
++func agentExactSchema(tools []Tool, name string) (string, error) {
++	for _, tool := range tools {
++		if tool.Function.Name == name {
++			b, err := json.Marshal(map[string]interface{}{"name": name, "description": tool.Function.Description, "input_schema": tool.Function.Parameters})
++			if err != nil {
++				return "", err
++			}
++			return "READ-ONLY ACTION SCHEMA RESULT\n" + string(b) + "\nNow continue the user's task. Request the real local action with its exact schema; the local client will execute it and return a result.", nil
++		}
++	}
++	return "", fmt.Errorf("requested action schema is not in the current Claude Code tool registry")
++}
+diff --git a/internal/proxy/agent_session_v2_test.go b/internal/proxy/agent_session_v2_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/proxy/agent_session_v2_test.go
+@@ -0,0 +1,283 @@
++package proxy
++
++import (
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++)
++
++func TestV2SessionReuseRetryRestartAndBranches(t *testing.T) {
++	oldCfg, oldBase := AppConfig, NotionAPIBase
++	AppConfig = DefaultConfig()
++	defer func() { AppConfig, NotionAPIBase = oldCfg, oldBase }()
++	t.Setenv("NOTION_AGENT_SESSION_DIR", t.TempDir())
++	created, sent, polls := 0, 0, 0
++	turn := 0
++	var sendContent string
++	stale := false
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var body map[string]interface{}
++		json.NewDecoder(r.Body).Decode(&body)
++		switch filepath.Base(r.URL.Path) {
++		case "createAgentThread":
++			created++
++			turn++
++			id := body["threadId"]
++			json.NewEncoder(w).Encode(map[string]interface{}{"threadId": id, "thread": map[string]interface{}{"id": id, "data": map[string]interface{}{"agent_provider": map[string]string{"model": "fixed", "selectedModel": "fixed"}}}})
++		case "sendEventToAgentThread":
++			sent++
++			turn++
++			event := body["event"].(map[string]interface{})
++			if event["type"] != "user.message" || body["model"] != "fixed" || body["clientEventId"] == "" {
++				t.Error("invalid continuation contract")
++			}
++			encoded, _ := json.Marshal(event["content"])
++			sendContent = string(encoded)
++			stale = true
++			w.Write([]byte(`{}`))
++		case "getThreadTranscript":
++			polls++
++			n := turn
++			if stale {
++				n--
++				stale = false
++			}
++			fmt.Fprintf(w, `{"type":"agent_service_transcript_page","session":{"status":"idle"},"has_more_backward":true,"has_more_forward":false,"patches":[{"op":"put","entity":{"id":"a%d","kind":"assistant_message","sequence":%d,"content":[{"type":"text","text":"answer%d"}]}},{"op":"put","entity":{"id":"done%d","kind":"turn_completed","sequence":%d,"stop_reason":"end_turn"}}]}`, n, n*10-1, n, n, n*10)
++		default:
++			t.Error("unexpected endpoint")
++		}
++	}))
++	defer server.Close()
++	NotionAPIBase = server.URL
++	acc := &Account{UserEmail: "local-test", SpaceID: "space"}
++	first := []ChatMessage{{Role: "system", Content: "x-anthropic-billing-header: nonce=first\nnative instructions"}, {Role: "user", Content: "first request UNIQUE-FIRST"}}
++	call := func(m []ChatMessage) (string, error) {
++		s := ""
++		e := callAgentSession(acc, m, "claude-opus-5-5", "fixed", "session-A", func(x string, _ bool, _ *UsageInfo) { s += x }, server.Client())
++		return s, e
++	}
++	if s, e := call(first); e != nil || s != "answer1" {
++		t.Fatalf("first: %q %v", s, e)
++	}
++	previousPolls := polls
++	// A fresh in-memory lock registry simulates process restart; state is on disk.
++	agentSessionLocks = sync.Map{}
++	if s, e := call(first); e != nil || s != "answer1" {
++		t.Fatalf("retry: %q %v", s, e)
++	}
++	if polls != previousPolls {
++		t.Fatal("completed retry reached upstream")
++	}
++	second := append(cloneChatMessages(first), ChatMessage{Role: "assistant", Content: "answer1"}, ChatMessage{Role: "user", Content: "second request UNIQUE-SECOND"})
++	second[0].Content = "x-anthropic-billing-header: nonce=second\nnative instructions"
++	if s, e := call(second); e != nil || s != "answer2" {
++		t.Fatalf("second returned stale or concatenated output: %q %v", s, e)
++	}
++	if created != 1 || sent != 1 {
++		t.Fatalf("created=%d continued=%d", created, sent)
++	}
++	if strings.Contains(sendContent, "UNIQUE-FIRST") || !strings.Contains(sendContent, "UNIQUE-SECOND") {
++		t.Fatal("continuation did not send only new messages")
++	}
++	if strings.Contains(sendContent, "native instructions") {
++		t.Fatal("billing marker caused unchanged system instructions to be resent")
++	}
++	branch := cloneChatMessages(second)
++	branch[1].Content = "changed original"
++	if _, e := call(branch); e == nil {
++		t.Fatal("divergent history accepted")
++	}
++	if created != 1 || sent != 1 {
++		t.Fatal("branch unexpectedly mutated upstream")
++	}
++	var wg sync.WaitGroup
++	for i := 0; i < 5; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if _, e := call(second); e != nil {
++				t.Error(e)
++			}
++		}()
++	}
++	wg.Wait()
++	if created != 1 || sent != 1 {
++		t.Fatal("parallel retry generated duplicate turn")
++	}
++	if err := callAgentSession(&Account{UserEmail: "other", SpaceID: "space"}, second, "alias", "fixed", "session-A", func(string, bool, *UsageInfo) {}, server.Client()); err == nil {
++		t.Fatal("cross-account continuation accepted")
++	}
++}
++
++func TestV2TranscriptNewTurnOnly(t *testing.T) {
++	var p agentTranscriptPage
++	json.Unmarshal([]byte(capturedShape), &p)
++	if s, done, _, err := readAgentTranscriptAfter(p, 24); err != nil || done || s != "" {
++		t.Fatalf("stale completion accepted %q %v %v", s, done, err)
++	}
++	p.HasMoreForward = true
++	if _, _, _, err := readAgentTranscriptAfter(p, 0); err == nil {
++		t.Fatal("truncated new turn accepted")
++	}
++}
++
++func TestV2PendingUnknownCreateNeverDuplicates(t *testing.T) {
++	oldCfg, oldBase := AppConfig, NotionAPIBase
++	AppConfig = DefaultConfig()
++	defer func() { AppConfig, NotionAPIBase = oldCfg, oldBase }()
++	t.Setenv("NOTION_AGENT_SESSION_DIR", t.TempDir())
++	calls := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(502) }))
++	defer server.Close()
++	NotionAPIBase = server.URL
++	invoke := func() error {
++		return callAgentSession(&Account{}, []ChatMessage{{Role: "user", Content: "hello"}}, "opus", "fixed", "pending", func(string, bool, *UsageInfo) {}, server.Client())
++	}
++	if invoke() == nil || invoke() == nil {
++		t.Fatal("ambiguous create accepted")
++	}
++	if calls != 1 {
++		t.Fatal("uncertain request created another chat")
++	}
++	files, _ := os.ReadDir(os.Getenv("NOTION_AGENT_SESSION_DIR"))
++	if len(files) != 1 {
++		t.Fatal("missing recoverable state")
++	}
++}
++
++func TestV2ChildIdentity(t *testing.T) {
++	root := []ChatMessage{{Role: "user", Content: "root task"}}
++	child := []ChatMessage{{Role: "user", Content: "child task"}}
++	if agentSessionFingerprint(root, "same-cc-metadata", "fixed") == agentSessionFingerprint(child, "same-cc-metadata", "fixed") {
++		t.Fatal("root and child share thread")
++	}
++}
++
++func TestV2TranscriptAllowsUnrelatedRichText(t *testing.T) {
++	raw := strings.Replace(capturedShape, `"kind":"turn_completed"`, `"kind":"turn_completed","text":{"delta":"unrelated"}`, 1)
++	var page agentTranscriptPage
++	if err := json.Unmarshal([]byte(raw), &page); err != nil {
++		t.Fatal(err)
++	}
++	if text, done, _, err := readAgentTranscriptAfter(page, 0); err != nil || !done || text != "answer" {
++		t.Fatalf("%q %v %v", text, done, err)
++	}
++}
++
++func TestV2SystemDeltaRetainsNewInstructionsWithoutRepeatingOld(t *testing.T) {
++	messages := []ChatMessage{{Role: "system", Content: "x-anthropic-billing-header: a\noriginal prompt"}, {Role: "system", Content: "tool schema"}}
++	first, seen := agentSystemDelta(messages, nil)
++	if len(first) != 2 {
++		t.Fatal("initial instructions missing")
++	}
++	messages[0].Content = "x-anthropic-billing-header: b\noriginal prompt"
++	messages = append(messages, ChatMessage{Role: "system", Content: "newly loaded Skill instructions"})
++	delta, seen := agentSystemDelta(messages, seen)
++	if len(delta) != 1 || delta[0].Content != "newly loaded Skill instructions" || len(seen) != 3 {
++		t.Fatal("system delta lost new instructions or repeated unchanged prompt")
++	}
++}
++
++func TestV2ResumeDrainsAcceptedEventBeforeNewTurn(t *testing.T) {
++	oldCfg, oldBase := AppConfig, NotionAPIBase
++	AppConfig = DefaultConfig()
++	defer func() { AppConfig, NotionAPIBase = oldCfg, oldBase }()
++	t.Setenv("NOTION_AGENT_SESSION_DIR", t.TempDir())
++	creates, sends, queries, turn := 0, 0, 0, 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var body map[string]interface{}
++		json.NewDecoder(r.Body).Decode(&body)
++		switch filepath.Base(r.URL.Path) {
++		case "createAgentThread":
++			creates++
++			turn = 1
++			id := body["threadId"]
++			json.NewEncoder(w).Encode(map[string]interface{}{"threadId": id, "thread": map[string]interface{}{"id": id, "data": map[string]interface{}{"agent_provider": map[string]string{"model": "fixed", "selectedModel": "fixed"}}}})
++		case "sendEventToAgentThread":
++			sends++
++			turn++
++			w.Write([]byte(`{}`))
++		case "getThreadTranscript":
++			queries++
++			if queries == 1 {
++				w.WriteHeader(502)
++				return
++			}
++			fmt.Fprintf(w, `{"type":"agent_service_transcript_page","session":{"status":"idle"},"patches":[{"op":"put","entity":{"id":"a%d","kind":"assistant_message","sequence":%d,"content":[{"type":"text","text":"answer%d"}]}},{"op":"put","entity":{"id":"d%d","kind":"turn_completed","sequence":%d,"stop_reason":"end_turn"}}]}`, turn, turn*10-1, turn, turn, turn*10)
++		}
++	}))
++	defer server.Close()
++	NotionAPIBase = server.URL
++	first := []ChatMessage{{Role: "user", Content: "first"}}
++	acc := &Account{}
++	call := func(m []ChatMessage) (string, error) {
++		answer := ""
++		err := callAgentSession(acc, m, "alias", "fixed", "resume", func(s string, _ bool, _ *UsageInfo) { answer += s }, server.Client())
++		return answer, err
++	}
++	if _, err := call(first); err == nil {
++		t.Fatal("expected lost poll response")
++	}
++	next := append(cloneChatMessages(first), ChatMessage{Role: "user", Content: "continue after disconnect"})
++	if answer, err := call(next); err != nil || answer != "answer2" {
++		t.Fatalf("resume returned previous turn: %q %v", answer, err)
++	}
++	if creates != 1 || sends != 1 || queries != 3 {
++		t.Fatalf("creates=%d sends=%d queries=%d", creates, sends, queries)
++	}
++}
++
++func TestV2CatalogSchemaResolutionKeepsEveryTool(t *testing.T) {
++	oldCfg, oldBase := AppConfig, NotionAPIBase
++	AppConfig = DefaultConfig()
++	defer func() { AppConfig, NotionAPIBase = oldCfg, oldBase }()
++	t.Setenv("NOTION_AGENT_SESSION_DIR", t.TempDir())
++	tools := []Tool{{Type: "function", Function: ToolFunction{Name: "Read", Parameters: map[string]interface{}{"type": "object"}}}, {Type: "function", Function: ToolFunction{Name: "mcp__probe__nonce", Description: "Exact MCP nonce checker", Parameters: map[string]interface{}{"type": "object", "required": []string{"secret_marker"}, "properties": map[string]interface{}{"secret_marker": map[string]interface{}{"type": "string", "enum": []string{"BLIND_NONCE_719"}}}}}}}
++	catalog := buildAgentActionCatalog(tools)
++	if !strings.Contains(catalog, "mcp__probe__nonce") || strings.Contains(catalog, "BLIND_NONCE_719") {
++		t.Fatal("MCP missing from catalog or schema eagerly expanded")
++	}
++	creates, sends, turn := 0, 0, 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var body map[string]interface{}
++		json.NewDecoder(r.Body).Decode(&body)
++		switch filepath.Base(r.URL.Path) {
++		case "createAgentThread":
++			creates++
++			turn = 1
++			id := body["threadId"]
++			json.NewEncoder(w).Encode(map[string]interface{}{"threadId": id, "thread": map[string]interface{}{"id": id, "data": map[string]interface{}{"agent_provider": map[string]string{"model": "fixed", "selectedModel": "fixed"}}}})
++		case "sendEventToAgentThread":
++			sends++
++			turn++
++			encoded, _ := json.Marshal(body)
++			if !strings.Contains(string(encoded), "BLIND_NONCE_719") {
++				t.Error("exact enum schema was not supplied")
++			}
++			w.Write([]byte(`{}`))
++		case "getThreadTranscript":
++			answer := `{"name":"__notion_get_action_schema","arguments":{"name":"mcp__probe__nonce"}}`
++			if turn == 2 {
++				answer = `{"name":"mcp__probe__nonce","arguments":{"secret_marker":"BLIND_NONCE_719"}}`
++			}
++			json.NewEncoder(w).Encode(map[string]interface{}{"type": "agent_service_transcript_page", "session": map[string]string{"status": "idle"}, "patches": []interface{}{map[string]interface{}{"op": "put", "entity": map[string]interface{}{"id": "reply", "kind": "assistant_message", "sequence": turn*10 - 1, "content": []interface{}{map[string]string{"type": "text", "text": answer}}}}, map[string]interface{}{"op": "put", "entity": map[string]interface{}{"id": "done", "kind": "turn_completed", "sequence": turn * 10, "stop_reason": "end_turn"}}}})
++		}
++	}))
++	defer server.Close()
++	NotionAPIBase = server.URL
++	answer := ""
++	messages := []ChatMessage{{Role: "system", Content: catalog}, {Role: "user", Content: "use the local MCP nonce checker"}}
++	err := callAgentSession(&Account{}, messages, "opus", "fixed", "schema", func(s string, _ bool, _ *UsageInfo) { answer += s }, server.Client(), tools)
++	if err != nil || strings.Contains(answer, agentSchemaAction) || !strings.Contains(answer, "BLIND_NONCE_719") {
++		t.Fatalf("helper leaked or schema failed: %s %v", answer, err)
++	}
++	if creates != 1 || sends != 1 {
++		t.Fatalf("creates=%d sends=%d", creates, sends)
++	}
++}

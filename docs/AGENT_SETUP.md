@@ -46,17 +46,17 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -A
 部署并验证此项目的授权包含真实测试时，执行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance.ps1 -Run
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance-full.ps1 -Run
 ```
 
-用户只要求查看或预检时，省略 `-Run`。五项验收、原始事件和文件结果写在本机忽略目录中；要求进程成功退出且 `evidence\acceptance-summary.json` 的 passed 为 true。验收失败需查看本地证据，不能只引用模型“完成了”的回答。测试会使用 Notion AI 额度。
+用户只要求查看或预检时，省略 `-Run`。V2 原生 Skill/文件/单线程验收、原始事件和文件结果写在本机忽略目录中；要求进程成功退出且本次 `evidence/<run-id>-v2-official-cli-summary.json` 的 passed 为 true。加 `-Mcp` 可检查本机 MCP HMAC。旧五项套件保留为 V1，避免用它测试 V2 聊天复用。验收失败需查看本地证据，不能只引用模型“完成了”的回答。测试会使用 Notion AI 额度。
 
 ## 5. 后续任务和交付
 
 在用户指定目录执行非交互小任务可使用专用入口，例如：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action claude -WorkDir "D:\MyNotes\Test" --print "先读取当前目录的 README.md，只返回摘要，不修改文件。"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\full.ps1 -WorkDir "D:\MyNotes\Test" --print "先读取当前目录的 README.md，只返回摘要，不修改文件。"
 ```
 
-实际工具集合为 Bash/Read/Edit。当前桥接的消息、上下文和推理控制限制见 [模型与能力边界](MODEL_AND_LIMITS.md)。任务结束报告状态、验证对象和证据位置；若无需继续运行，停止本项目网关。清理前预览并保留用户需要的结果。
+V2 保留原生工具注册与默认提示词，继承已有用户发现目录；旧精简入口才限制为 Bash/Read/Edit。完整用法见 [V2 入口](FULL_MODE.md)。当前桥接的消息、上下文和推理控制限制见 [模型与能力边界](MODEL_AND_LIMITS.md)。任务结束报告状态、验证对象和证据位置；若无需继续运行，分别停止本项目 8081 与 V2 8082 网关。清理前预览并保留用户需要的结果。

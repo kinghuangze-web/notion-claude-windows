@@ -23,3 +23,7 @@ Original route: https://x.com/ElowenY20119/status/2109947661214458149 — “Not
 ## External tools
 
 Go, Git for Windows, Python, Chrome and Claude Code are installed separately from their official sources and keep their respective licenses. Python dependency: PyYAML 6.0.3 (MIT); Go dependencies and versions remain governed by the pinned source's go.mod/go.sum. No model weights or Notion credentials are distributed.
+
+## V2 protocol research
+
+Continuation request fields were checked against a public Notion client resource snapshot on 2026-10-19. Source URL, module and SHA-256 are recorded in docs/V2_PLAN.md. The client bundle is not redistributed; V2 contains the transport adaptation and its synthetic regression tests.

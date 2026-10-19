@@ -19,6 +19,15 @@ foreach ($target in $targets) {
 if (-not $Execute) { Write-Output 'Preview only. Use -Execute to remove these paths.'; exit 0 }
 # Inspect each directory without traversing junctions, then refuse redirected targets.
 $pending = New-Object 'System.Collections.Generic.Stack[string]'
+$inheritedLinks = New-Object 'System.Collections.Generic.List[string]'
+$fullConfig = Join-Path $cleanupRoot 'runtime\full\claude'
+function Test-InheritedLink($Item) {
+    $name = $Item.Name
+    if ($name -notin @('skills','plugins','agents','commands','hooks')) { return $false }
+    if ($Item.FullName -ne (Join-Path $fullConfig $name)) { return $false }
+    $expected = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE ".claude\$name"))
+    return $Item.LinkType -eq 'Junction' -and @($Item.Target).Count -eq 1 -and [IO.Path]::GetFullPath($Item.Target[0]) -eq $expected
+}
 foreach ($target in $targets) { if (Test-Path -LiteralPath $target) { $pending.Push($target) } }
 while ($pending.Count) {
     $current = $pending.Pop()
@@ -26,7 +35,10 @@ while ($pending.Count) {
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Redirected cleanup target: $current" }
     if ($item.PSIsContainer) {
         foreach ($child in Get-ChildItem -LiteralPath $current -Force) {
-            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Redirected cleanup entry: $($child.FullName)" }
+            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                if (Test-InheritedLink $child) { $inheritedLinks.Add($child.FullName); continue }
+                throw "Redirected cleanup entry: $($child.FullName)"
+            }
             if ($child.PSIsContainer) { $pending.Push($child.FullName) }
         }
     }
@@ -42,7 +54,7 @@ if (Test-Path -LiteralPath $sessionRecords) {
         }
     }
 }
-$gatewayRecordPath = Join-Path $cleanupRoot 'runtime\gateway-process.json'
+foreach ($gatewayRecordPath in @((Join-Path $cleanupRoot 'runtime\gateway-process.json'), (Join-Path $cleanupRoot 'runtime\full\gateway-process.json'))) {
 if (Test-Path -LiteralPath $gatewayRecordPath) {
     $record = Get-Content -LiteralPath $gatewayRecordPath -Raw | ConvertFrom-Json
     $expectedExe = Join-Path $cleanupRoot 'runtime\notion-manager.exe'
@@ -59,5 +71,8 @@ if (Test-Path -LiteralPath $gatewayRecordPath) {
         }
     }
 }
+}
+# Only unlink the five recognized leaf junctions; never traverse their user directories.
+foreach ($link in $inheritedLinks) { [IO.Directory]::Delete($link) }
 foreach ($target in $targets) { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force } }
 Write-Output 'Cleanup complete. Existing Go/Git/Python/Claude installations were not removed.'

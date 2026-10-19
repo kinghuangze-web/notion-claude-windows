@@ -2,7 +2,7 @@ param([switch]$SkipTests)
 . "$PSScriptRoot\env.ps1"
 . "$PSScriptRoot\protect-runtime.ps1"
 Set-Location -LiteralPath $ProjectRoot
-if (Test-Path -LiteralPath 'runtime\gateway-process.json') { throw 'Stop the gateway with Stop-Gateway.cmd before rebuilding.' }
+if ((Test-Path -LiteralPath 'runtime\gateway-process.json') -or (Test-Path -LiteralPath 'runtime\full\gateway-process.json')) { throw 'Stop both project gateways before rebuilding (Stop-Gateway.cmd and Stop-Full-Gateway.cmd).' }
 foreach ($pair in @(@('Go',$ProjectGo),@('Python',$ProjectPython),@('Claude Code',$ProjectClaude),@('Git Bash',$ProjectBash))) {
     if (-not $pair[1] -or -not (Test-Path -LiteralPath $pair[1] -PathType Leaf)) {
         throw "Missing $($pair[0]). See docs/INSTALL_WINDOWS.md or tools.local.ps1.example."
@@ -27,7 +27,6 @@ if (-not (Test-Path -LiteralPath '.venv\Scripts\python.exe')) {
 if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
 $base = '2d6d3dc2fa74f929bd9a8ebd3c1569f5dcca1b88'
 $source = Join-Path $ProjectRoot '_source'
-$patch = Join-Path $ProjectRoot 'patches\opus55.patch'
 if (-not (Test-Path -LiteralPath $source)) {
     & git init --quiet $source
     if ($LASTEXITCODE -ne 0) { throw 'Source initialization failed.' }
@@ -41,18 +40,8 @@ if ($LASTEXITCODE -ne 0) {
     $head = & git -C $source rev-parse HEAD
 }
 if ($head -ne $base) { throw 'Source commit differs from the pinned version; refusing to build.' }
-$dirty = & git -C $source status --porcelain
-if ($LASTEXITCODE -ne 0) { throw 'Source status check failed.' }
-if (-not $dirty) {
-    & git -C $source apply --check $patch
-    if ($LASTEXITCODE -ne 0) { throw 'Patch compatibility check failed.' }
-    & git -C $source apply $patch
-    if ($LASTEXITCODE -ne 0) { throw 'Patch application failed.' }
-} else {
-    & git -C $source apply --reverse --check $patch
-    if ($LASTEXITCODE -ne 0) { throw 'Source has local changes incompatible with this patch. Preserve them and use a fresh project copy.' }
-    Write-Output 'Existing Opus patch detected; preserved.'
-}
+& .\.venv\Scripts\python.exe .\scripts\apply_patches.py
+if ($LASTEXITCODE -ne 0) { throw 'Pinned patch application failed; preserve local changes and inspect the error.' }
 Push-Location -LiteralPath $source
 try {
     & $ProjectGo build -trimpath -o "$ProjectRoot\runtime\notion-manager.exe" ./cmd/notion-manager
@@ -68,4 +57,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Local configuration initialization failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Launcher checks failed.' }
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_readiness.py -v
 if ($LASTEXITCODE -ne 0) { throw 'Readiness state checks failed.' }
+& .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_full_mode.py -v
+if ($LASTEXITCODE -ne 0) { throw 'Full-mode launcher checks failed.' }
+& .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_patches.py -v
+if ($LASTEXITCODE -ne 0) { throw 'Patch install and upgrade checks failed.' }
 Write-Output 'Setup complete. Start-Gateway.cmd starts the dashboard; import a Notion account locally before inference.'
