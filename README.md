@@ -1,100 +1,200 @@
 # notion-claude-windows
 
-在 Windows 上将自己的 Notion AI 接入 Claude Code CLI，以官方 CLI 框架、默认提示词、原生 Skills 和工具运行本地任务。
+[中文 Agent 教程](#中文agent-教程) · [English agent guide](#english-agent-guide)
 
-V2 新增会话复用、完整模式入口和大型 MCP 工具目录；旧精简入口继续保留。本项目提供固定版本安装、Opus 5.5 适配、独立启动器、验收和清理脚本。它是基于 [notion_manager](https://github.com/SleepingBag945/notion_manager) 实验性 Agent 通道的 Windows 复现工具包。Notion AI 返回回答和工具指令，Claude Code 在电脑上执行工具。
+## 中文：Agent 教程
 
-```text
-官方 Claude Code CLI → V2 网关 127.0.0.1:8082 → Notion AI / Opus 5.5
-      ↑                     ← 同线程续写/工具指令 ←
-      └─ 本机执行原生工具 / Skill / MCP，再提交结果
-账号管理与旧精简入口：127.0.0.1:8081
+### 目标与约束
+
+在 Windows x64 上，将用户自己的 **Notion Opus 5.5** 接入**原生 Claude Code**，保留默认系统提示词、原生工具和正常的用户/项目 Skills、插件与 MCP 发现。同一会话通过持久化线程增量续写。
+
+本仓库面向执行 Agent，只支持 V2。已移除 bare 精简启动器、受限工具白名单、双击包装器及重复教程；默认只有一个 `127.0.0.1:8081` 网关。不要为了通过测试而替换模型后端、框架或用户实际入口。
+
+型号依赖 Notion 服务端字段确认，未独立验证权重。上游仍是 Notion Agent 文本协议，全部 API 语义、插件、附件和长期稳定性没有等价认证。[验证范围](docs/VALIDATION.md) · [开发日志](docs/DEVLOG.md) · [隐私审计](docs/PRIVACY_AUDIT.md)。
+
+### 1. 定位真实安装并检查依赖
+
+先读 [AGENTS.md](AGENTS.md)，确认用户真正使用的工作目录、CLI 命令、供应商选择、本机地址和所属安装。已有安装先检查进程与 Git 状态，保留个人文件和未提交改动；不按端口直接结束未知进程。
+
+新安装使用独立目录，已有仓库则复用：
+
+```powershell
+git clone https://github.com/kinghuangze-web/notion-claude-windows.git D:\Projects\notion-claude-windows
+Set-Location -LiteralPath D:\Projects\notion-claude-windows
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
 ```
 
-## 交给 Agent 执行
+依赖：Git for Windows、Go 1.26+、Python 3.11+、原生 Claude Code CLI。`doctor` 返回 JSON；在任务授权内处理具体缺项。路径覆盖可用忽略的 `tools.local.ps1`，模板为 `tools.local.ps1.example`。不修改系统代理、全局环境、其他供应商或安装开机服务。
 
-将仓库链接和下面这段任务交给能执行 Windows 命令的 Agent：
+### 2. 编译并启动实际 V2 网关
 
-```text
-在 Windows 的 D 盘独立目录部署 https://github.com/kinghuangze-web/notion-claude-windows 。
-先读取 AGENTS.md 和 docs/AGENT_SETUP.md，检查依赖，执行固定版本安装、启动和本地检查。
-账号未导入时，给出本机管理页地址及 token_v2 获取步骤，等我本人在本机导入；不要让我把凭证发到聊天。
-导入后使用 V2 Full-Claude 入口并运行 acceptance-full.ps1 -Run，核对原生 Skill、真实文件、上游模型与单线程复用；需要时加 -Mcp。不要修改全局供应商配置，保留清理入口和失败证据。
+升级前先停止本安装已记录的网关。已在使用的安装应在原位置升级，不能用另一个测试网关代替。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action stop
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action verify-local
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action ready
 ```
 
-项目已有非交互安装、启动和验收脚本。新增 `doctor.ps1` 返回依赖检查 JSON，`project.ps1 -Action ready` 返回当前阶段和退出码。具体命令及状态处理见 [Agent 执行流程](docs/AGENT_SETUP.md)。`.cmd` 包装器供人工双击使用，Agent 直接运行 `.ps1`，避免 pause 等待。
+Setup 固定上游提交 `2d6d3dc2fa74f929bd9a8ebd3c1569f5dcca1b88`，应用累积补丁后编译。旧源码补丁仅用于升级，不保留旧运行模式。已有配置先备份，只补齐 V2 开关，保留地址、Key、账号目录和其他字段。构建记录会绑定实际 exe 的 SHA-256，缺失或不匹配时必须重建；旧进程不能被当成 V2 就绪。
 
-如果你使用 **CC Switch 切到 Notion，然后在任意目录直接运行 Claude**，请按 [普通命令接入](docs/CC_SWITCH.md) 升级并启用实际 8081 网关。独立 V2 入口测通不会自动改变旧供应商；普通路径已另用 Claude Code 2.1.303、auto 模式和真实文件工具验证。
+| 状态 | 退出码 | Agent 下一步 |
+|---|---:|---|
+| `awaiting_setup` / `awaiting_gateway` | 2 | 完成构建或启动正确网关 |
+| `awaiting_account` | 3 | 请所有者在本机登录/导入自己的 Notion 会话并核对工作区，再重新检查；不索要聊天凭证，不自动提取浏览器凭证 |
+| `ready_for_acceptance` | 0 | 仅可开始验收，尚未验证推理 |
+| `gateway_needs_rebuild` | 4 | 缺少或不匹配的 V2 构建记录，重新 Setup |
+| `gateway_needs_v2_restart` | 4 | 确认归属后停止、重启；改文件不等于进程已加载 |
+| 其他错误 | 4 | 按具体配置、归属、认证或健康原因修复，不降级 Auto |
 
-## 手动开始使用
+管理页地址由状态返回，密码只留在本机 `runtime/private/admin-password.txt`。Cookie、Key、密码、工作区标识和原始日志不得公开。Basic 数值、Premium credits、官方用量百分比与 Token 不可混用；同一登录下的工作区权益可能不同。
 
-1. 准备 Windows x64、Git for Windows、Go 1.26+、Python 3.11+、原生 Claude Code CLI。先在自己的 Notion 工作区确认 AI 能用，且可选择 Opus 5.5。
-2. 从 **Code → Download ZIP** 下载并解压，放到独立目录，例如 `D:\Projects\notion-claude-windows`。整个项目放在 D 盘，后续缓存和运行数据也跟随项目。
-3. 双击 `Setup.cmd`。脚本取得固定上游提交、应用补丁、下载依赖、编译并检查。初次安装需要访问 GitHub、Go 模块服务和 PyPI。
-4. 双击 `Start-Gateway.cmd`，在 Chrome 打开 `http://127.0.0.1:8081/dashboard/`。管理密码在本机 `runtime\private\admin-password.txt`。
-5. **本人获取并导入 `token_v2`**：在已登录 Notion 的 Chrome 页面按 `F12` 或 `Ctrl + Shift + I`，选择 `Application（应用）→ Storage（存储）→ Cookies → 当前 Notion 域名`，在 Name 列找到 `token_v2`，复制这一行完整的 **Value**，直接粘贴到本机管理页“添加账号”的输入框。看不到 Application 时点击顶部 `»`；[完整位置说明与排错](docs/ACCOUNT_IMPORT.md)。核对账号和工作区，再用 `Status.cmd` 确认 `usable_accounts` 至少为 1。
-6. 双击 `Full-Claude.cmd` 使用 V2，从项目的 `demo` 目录开始测试。默认请求 `claude-opus-5-5`，不降级到 Auto。已有版本先停止网关并重新 Setup；[升级与使用](docs/FULL_MODE.md)。
-7. 双击 `Acceptance-Full.cmd` 验证原生 Skill、Read/Write/Edit 与单线程复用，或按 [V2 教程](docs/FULL_MODE.md) 加测真实 MCP。验收会使用 Notion AI 额度。旧 `Acceptance.cmd` 仍是 V1 五项套件。
+### 3. 接入用户真实入口
 
-首次安装的具体下载选项、命令与成功标志见 [Windows 安装教程](docs/INSTALL_WINDOWS.md)。Cookie 操作见 [账号导入](docs/ACCOUNT_IMPORT.md)。
+**用户使用 CC Switch 后直接启动 Claude 时：**核对实际选中的 Notion 供应商、普通 Claude 生效配置、地址和 Key。需要改动时，只在所请求的接入范围内备份并更新该 Notion 供应商，保留其他供应商和普通设置；凭证只在本机处理。重开普通 CLI 后，按原目录和原启动方式验证，不用另一个配置目录或临时路由覆盖替代。
 
-## 必须本人完成的操作
+**Agent 自己需要非交互调用时：**下列入口只给子进程设置本机路由，保留完整原生 CLI、配置发现和权限，不改 CC Switch 或全局 settings：
 
-| 操作 | 原因 |
-|---|---|
-| 处理需要交互的安装权限或系统提示 | Agent 可在已授权范围内检查、安装依赖；本工具包不自动安装系统软件 |
-| 登录 Notion，确认账号与目标工作区的 AI 权益 | 登录会话和权益属于自己的账号 |
-| 在 Chrome 查看并导入自己的 token_v2 | 它是敏感登录凭证，仓库没有预置账号 |
-| 在本机管理页核对识别的账号、工作区及可用状态 | 同一账号的不同工作区可能有不同额度 |
-| 同意 CLI 的目录信任或工具权限提示 | 本地工具会读写当前工作目录 |
-| 验收后查看真实目录和文件，再决定是否用于自己的项目 | 聊天中的“已完成”不能代替文件结果 |
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action claude -WorkDir "D:\Projects\Target" --print "读取当前目录 README.md，只返回摘要，不修改文件。"
+```
 
-## Windows 的差异
+这不等于用户普通入口已验证。已有自定义 `CLAUDE_CONFIG_DIR` 会保留；本项目不建立另一套 Claude 用户目录或 Junction。固定 `claude-opus-5-5`，禁止 Auto/其他型号，不使用 bare、替换系统提示词或工具白名单。
 
-- Chrome 开发者工具：`F12` 或 `Ctrl + Shift + I`；也可从右上角 `⋮ → 更多工具 → 开发者工具` 打开。Mac 的 `Option + Command + I` 不适用于 Windows。
-- Cookie 路径：`Application（应用）→ Storage（存储）→ Cookies`，选择当前 Notion 页面对应的域名。顶部没有 Application 时，点击 `»` 展开隐藏选项。
-- 项目控制使用 Windows PowerShell 和 `.cmd`；模型执行 Bash 时使用 **Git for Windows 的 Bash**，不要求安装 WSL。Git Bash 中的 `/d/Projects/...` 与 `D:\Projects\...` 可指同一位置。
-- 凭证权限使用 NTFS ACL；上游一项 Unix 文件权限断言不适用于 Windows，其余 Go 回归仍执行。
+### 4. 真实验收与完成条件
 
-## 文件与入口
+授权包含真实测试时，验证原生 Skill、Read/Write/Edit 和单线程复用。默认仅预览，显式 `-Run` 才消耗 Notion 额度；`-Mcp` 加测实际本机 MCP 的随机 nonce/HMAC：
 
-| 入口 | 功能 |
-|---|---|
-| `Setup.cmd` | 安装项目依赖、取得固定源码、应用补丁、编译和检查 |
-| `Start-Gateway.cmd` | 启动或复用属于本项目的网关 |
-| `Full-Claude.cmd` | V2：官方默认提示词、原生工具和 Skills，自动启动独立 8082 网关 |
-| `Claude-Code.cmd` | V1：保留原 Bash/Read/Edit 精简入口 |
-| `Acceptance-Full.cmd` | V2 原生 Skill、文件、模型确认与单线程验收 |
-| `Stop-Full-Gateway.cmd` | 停止属于本项目的 V2 网关 |
-| `Status.cmd` | 显示脱敏状态和可用账号数 |
-| `Acceptance.cmd` | 五项实际推理与工具验收 |
-| `Stop-Gateway.cmd` | 按 PID、exe、启动时间停止本项目网关 |
-| `Preview-Cleanup.cmd` | 只显示清理目标，不删除 |
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance.ps1 -Run
+# 需要 MCP 验证时再执行；不重复已满足要求的检查
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance.ps1 -Run -Mcp
+```
 
-运行后新增 `_source`、`.venv`、`_cache`、`_tmp`、`runtime`、`logs`、`evidence`、`demo`；这些目录均被 Git 排除。项目没有系统服务、计划任务或开机启动。
+必须同时满足：CLI 返回 0、最终 `is_error=false`、实际成功的 Skill/Read/Write/Edit 事件、随机输入对应的精确文件字节、上游型号一致，以及一个会话只有一次线程创建。MCP 还需独立调用日志和 HMAC 一致。避免其他会话干扰日志计数，但不能结束不属于本任务的会话。
 
-## 固定模型与能力边界
+随后在**用户真实工作目录和普通入口**做最小对话、随机文件读写及恢复验证。保留配置前后摘要、实际结果和失败证据；只清除本任务创建且不再需要的临时夹。所有原始事件与证明留在忽略目录。
 
-补丁每次从当前账号的实时模型列表查找 Opus 5.5，显式提交模型 ID，再核对 Notion 返回的 `model`、`selectedModel` 和线程 ID。缺字段、不匹配、型号不可用或请求 Auto，均报错；不会静默降级。实现见 [模型适配](docs/MODEL_AND_LIMITS.md)。
+### 事故注意事项：独立入口成功不等于用户能用
 
-V2 真实试验通过原生 Skill、连续 Read → Write → Edit → Read、独立 MCP HMAC 和恢复；同一个 CLI 会话 18 个成功上游回合只创建 1 个 Notion 对话。初始 23 项工具、21 项 Skill，动态观察到 252 项总工具，不代表每个工具都执行过。固定模型依据为 Notion 服务端报告，未独立检查后端权重。[V2 验证范围](docs/VALIDATION_V2.md)。
+曾出现：独立 V2 测通并上传仓库，但 CC Switch 仍指向运行中的旧 `8081`，独立新网关未启动。用户普通 Claude 持续重试，上游 HTTP 400。把局部测试描述为日常可用，超出了证据范围。
 
-V2 保留官方 CLI 框架和默认提示词，但上游消息仍经过 Notion 文本协议；全部原生角色语义、所有插件/MCP、附件、长上下文压缩和长期并发没有等价认证。新会话通常仍生成一个可见 Notion 对话，旧聊天不会自动删除。旧精简入口的限制与历史证据见 [模型边界](docs/MODEL_AND_LIMITS.md) 和 [V1 验证](docs/VALIDATION.md)。
+修正升级了**实际使用的网关**，保留地址、Key、账号和用户 settings。原生 CLI 2.1.303 在用户目录、auto 模式下完成对话及 `Read → Write → Edit → Read`，6 个成功上游回合仅创建 1 个线程。当前流程默认启用 V2、拒绝旧进程就绪，并增加迁移回归。
 
-更新方案与开发过程见 [V2 方案](docs/V2_PLAN.md)、[开发日志](docs/DEVLOG.md)。公开包安装/生命周期检查和先前隔离环境真实推理分开记录，不把本地健康检查当作账号已通过推理。
+交付前逐项核对：**用户入口 → 生效配置 → API 地址 → 进程/二进制 → V2 启动方式 → 真实上游 → 工具和文件 → 最终成功**。模型标题/列表、HTTP 200、GitHub 提交或中间文件均不充分。新会话通常仍产生一个 Notion 对话；不自动删除旧聊天。
 
-## 隐私与清理
+### 5. 发布、隐私与清理
 
-本仓库不包含 Cookie、账号、真实配置、API Key、管理密码、会话、原始日志或个人截图。凭证仅在本机 `runtime` 中生成和保存。任务内容及工具返回会通过网关发给 Notion；项目数据目录隔离不等于模型只能访问该目录。
+```powershell
+.\.venv\Scripts\python.exe .\scripts\check_release.py --check-index
+.\.venv\Scripts\python.exe .\scripts\audit_history.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\cleanup.ps1
+```
 
-缓存、临时文件、配置和会话随项目目录放置；没有 `setx` 或全局供应商切换。Go、Git、Python、Claude 既有安装可以保留其默认位置，包括 C 盘。Windows、Chrome 和安装器自身仍可能写入 C 盘；没有全盘零写入承诺。
+只发布 `release-files.txt` 白名单，核对当前内容、Git 跟踪范围、历史内容与提交身份。精确私有值匹配可用 `audit_history.py --private-values-file`，输入只可放在忽略的 `runtime/private`，输出不展示匹配值。历史删除不能撤销凭证；本次未发现需要清理的泄漏，因此未重写历史。
 
-清理先预览，再执行；支持依赖安装失败后清理。具体命令及保留项见 [清理与恢复](docs/CLEANUP.md)。遇到错误先看 [故障排查](docs/TROUBLESHOOTING.md)，分享问题时按 [隐私说明](PRIVACY.md) 脱敏。
+清理默认预览；已有删除授权且结果保留后再加 `-Execute`，整项目删除另加 `-RemoveProject`。保护进程归属和目标边界；旧 Junction 仅作安全解链接兼容。凭证、日志、会话和测试数据不发布。应用数据隔离不是文件沙箱，也不承诺 Windows 全盘零写入。
 
-## 来源与许可证
+许可证：[CC BY-NC-SA 4.0](LICENSE)；来源：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-- 基础代码：[SleepingBag945/notion_manager](https://github.com/SleepingBag945/notion_manager)，固定提交 `2d6d3dc2fa74f929bd9a8ebd3c1569f5dcca1b88`，对应 [PR #23](https://github.com/SleepingBag945/notion_manager/pull/23)。
-- 路线参考：[《Notion AI 接入 Claude Code：从配置到本地任务，手把手跑通》](https://x.com/ElowenY20119/status/2109947661214458149)。原文为 macOS 操作，本项目补充 Windows 流程和固定模型适配。
-- 补丁与 Windows 工具包改动说明：[CHANGELOG.md](CHANGELOG.md)。第三方来源：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+## English: Agent guide
 
-本项目采用与基础代码相同的 [CC BY-NC-SA 4.0](LICENSE)，保留署名、非商业和相同方式共享要求。Claude Code、Go、Python、Git 等软件不随仓库分发。
+### Goal and constraints
+
+Connect the owner's **Notion Opus 5.5** to **native Claude Code** on Windows x64. Preserve the default system prompt, native tools and normal user/project Skills, plugin and MCP discovery. Persist the backend thread and submit incremental turns.
+
+This repository is for execution agents. V2 is the only supported runtime. Bare/slim launchers, restricted tool lists, double-click wrappers and duplicate tutorials are removed. The default is a single `127.0.0.1:8081` gateway. Do not substitute another model provider, framework or user entry point to make a test pass.
+
+Model confirmation uses Notion's reported fields, not independent weight verification. Messages still use the Notion Agent text protocol; complete API equivalence, every plugin, attachments and long-term reliability are not certified. See [validation](docs/VALIDATION.md), [development log](docs/DEVLOG.md) and [privacy audit](docs/PRIVACY_AUDIT.md).
+
+### 1. Locate the actual installation and check dependencies
+
+Read [AGENTS.md](AGENTS.md). Identify the user's real directory, CLI command, selected provider, local address and owning installation. Inspect existing processes and Git changes; preserve personal files and uncommitted work. Never kill an unknown listener merely because it owns the desired port.
+
+Use a dedicated directory for a new installation, or reuse the existing checkout:
+
+```powershell
+git clone https://github.com/kinghuangze-web/notion-claude-windows.git D:\Projects\notion-claude-windows
+Set-Location -LiteralPath D:\Projects\notion-claude-windows
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
+```
+
+Requirements: Git for Windows, Go 1.26+, Python 3.11+, native Claude Code CLI. `doctor` returns JSON; resolve specific missing dependencies within task authorization. Optional paths belong in ignored `tools.local.ps1`; use `tools.local.ps1.example`. Do not change system proxies, global environment, unrelated providers or startup services.
+
+### 2. Build and start the actual V2 gateway
+
+Stop this installation's recorded gateways before upgrading. Upgrade an in-use installation in its actual location rather than substituting an unrelated test instance.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action stop
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action verify-local
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action ready
+```
+
+Setup pins upstream `2d6d3dc2fa74f929bd9a8ebd3c1569f5dcca1b88`, applies the cumulative patch and builds it. The older-source patch is migration-only. Existing configuration is backed up before enabling V2, preserving address, Key, accounts and other values. A build record binds the actual executable SHA-256; missing or mismatched records require rebuilding. An old process cannot count as V2 readiness.
+
+| State | Exit | Agent action |
+|---|---:|---|
+| `awaiting_setup` / `awaiting_gateway` | 2 | Build or start the correct gateway |
+| `awaiting_account` | 3 | Ask the owner to authenticate/import locally and confirm the workspace, then recheck. Never request credentials in chat or automatically extract browser credentials |
+| `ready_for_acceptance` | 0 | Acceptance may begin; inference is not verified |
+| `gateway_needs_rebuild` | 4 | 缺少或不匹配的 V2 构建记录，重新 Setup |
+| `gateway_needs_rebuild` | 4 | Missing/mismatched V2 build record: rerun setup |
+| `gateway_needs_v2_restart` | 4 | Verify ownership, stop and restart; edited files do not prove a process reloaded them |
+| Other errors | 4 | Fix the specific configuration, ownership, authentication or health failure without Auto fallback |
+
+Status returns the dashboard address; its password stays in `runtime/private/admin-password.txt`. Never publish cookies, Keys, passwords, workspace identifiers or raw logs. Basic counts, Premium credits, official usage percentages and tokens are different measurements. Workspaces under one login can have different entitlements.
+
+### 3. Connect the actual user entry point
+
+**For CC Switch followed by ordinary Claude:** verify the selected Notion provider, effective ordinary Claude settings, address and Key against the actual gateway. Within the requested integration scope, back up and update only that Notion provider when necessary; preserve unrelated providers and settings. Handle secrets locally. Restart ordinary Claude and test the original directory/startup method without alternate config directories or temporary route overrides.
+
+**For an agent's own non-interactive call:** the following routes only the child process. It preserves the full native CLI, configuration discovery and permissions, without changing CC Switch or global settings:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\project.ps1 -Action claude -WorkDir "D:\Projects\Target" --print "Read the current README.md and summarize it without editing files."
+```
+
+This does not establish that the user's ordinary entry works. An existing custom `CLAUDE_CONFIG_DIR` is retained; no alternate Claude user directory or Junction is created. The model is fixed to `claude-opus-5-5`: no Auto/other-model fallback, bare mode, replacement system prompt or tool whitelist.
+
+### 4. Live acceptance and completion
+
+When live tests are authorized, verify native Skill, Read/Write/Edit and one-thread reuse. The default is an inference-free preview; `-Run` consumes Notion allowance. `-Mcp` adds a real local MCP nonce/HMAC proof:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance.ps1 -Run
+# Add MCP verification only when needed; do not repeat sufficient checks
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\acceptance.ps1 -Run -Mcp
+```
+
+Require exit 0, final `is_error=false`, successful native Skill/Read/Write/Edit events, exact file bytes from random input, matching upstream model confirmation and one backend thread creation. MCP also needs an independent call log and matching HMAC. Avoid unrelated activity when counting logs, but never terminate another task's sessions.
+
+Then verify a minimal reply, random file round-trip and resume through the **actual user directory and ordinary entry point**. Keep configuration summaries, actual results and failures. Remove only temporary artifacts owned by this task. Raw events and proofs remain in ignored directories.
+
+### Incident notice: isolated success did not establish user usability
+
+An isolated V2 test passed and was published, while CC Switch still pointed at a running old `8081` gateway and the separate new gateway was not running. Ordinary Claude retried and the old upstream returned HTTP 400. Calling that isolated result working daily use exceeded the evidence.
+
+The fix upgraded the **gateway actually used**, preserving address, Key, accounts and user settings. Native CLI 2.1.303 in the user's directory, auto mode, passed a reply and `Read → Write → Edit → Read`; six successful upstream turns used one thread. The current flow enables V2 by default, rejects old-process readiness and tests migration.
+
+Before delivery, verify **user entry → effective settings → API address → process/binary → V2 startup mode → real upstream → tools/files → final success**. A model title/list, HTTP 200, GitHub commit or intermediate file is insufficient. A new session normally still creates a Notion conversation; old conversations are not deleted automatically.
+
+### 5. Release, privacy and cleanup
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\check_release.py --check-index
+.\.venv\Scripts\python.exe .\scripts\audit_history.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\cleanup.ps1
+```
+
+Release only the `release-files.txt` allowlist. Check current contents, tracked paths, history and commit identities. Optional exact matching uses `audit_history.py --private-values-file`; input must stay in ignored `runtime/private`, and matched values are never printed. Removing history does not revoke credentials. No leak requiring history cleanup was found in this review, so history was not rewritten.
+
+Cleanup previews by default. Once deletion is authorized and needed results are preserved, add `-Execute`; use `-RemoveProject` only for whole-project removal. Enforce ownership and path boundaries. Older Junctions are recognized solely for safe unlinking. Credentials, logs, sessions and test data are never published. Application data isolation is not a filesystem sandbox or a zero-system-drive-write guarantee.
+
+License: [CC BY-NC-SA 4.0](LICENSE). Attribution: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

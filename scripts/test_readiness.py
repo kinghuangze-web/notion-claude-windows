@@ -6,11 +6,18 @@ import manage
 
 
 class ReadinessChecks(unittest.TestCase):
+    def setUp(self):
+        self.build_patch = patch.object(manage, "verify_build")
+        self.build_patch.start()
+
+    def tearDown(self):
+        self.build_patch.stop()
+
     def check_state(self, health, expected, code, model_status=200):
         cfg = {"server": {"host": "127.0.0.1", "port": "18081", "api_key": "synthetic-test-key"},
-               "proxy": {"default_model": "claude-opus-5-5", "require_opus55": True, "agent_thread": True}}
+               "proxy": {"default_model": "claude-opus-5-5", "require_opus55": True, "agent_thread": True, "agent_session_v2": True}}
         with patch.object(manage, "CONFIG", Mock(is_file=lambda: True)), patch.object(manage, "EXE", Mock(is_file=lambda: True)), \
-             patch.object(manage, "config", return_value=cfg), patch.object(manage, "owned_process", return_value={"pid": 1}), \
+             patch.object(manage, "config", return_value=cfg), patch.object(manage, "owned_process", return_value={"pid": 1, "transport": "agent-session-v2"}), \
              patch.object(manage, "request", side_effect=[(200, health), (model_status, b'{}')]):
             value, actual = manage.readiness()
         self.assertEqual(value["state"], expected)
@@ -33,6 +40,19 @@ class ReadinessChecks(unittest.TestCase):
             value, code = manage.readiness()
         self.assertEqual((value["state"], code), ("awaiting_setup", 2))
         request.assert_not_called()
+
+    def test_old_running_gateway_cannot_be_reported_ready(self):
+        cfg = {"server": {"host": "127.0.0.1"}, "proxy": {"default_model": "claude-opus-5-5", "require_opus55": True, "agent_thread": True, "agent_session_v2": True}}
+        with patch.object(manage, "CONFIG", Mock(is_file=lambda: True)), patch.object(manage, "EXE", Mock(is_file=lambda: True)), patch.object(manage, "config", return_value=cfg), patch.object(manage, "owned_process", return_value={"pid": 1}), patch.object(manage, "request") as request:
+            state, code = manage.readiness()
+            self.assertEqual((state["state"], code), ("gateway_needs_v2_restart", 4))
+            request.assert_not_called()
+
+    def test_unverified_binary_cannot_report_ready(self):
+        with patch.object(manage, "CONFIG", Mock(is_file=lambda: True)), patch.object(manage, "EXE", Mock(is_file=lambda: True)), patch.object(manage, "verify_build", side_effect=RuntimeError("old build")), patch.object(manage, "request") as request:
+            state, code = manage.readiness()
+            self.assertEqual((state["state"], code), ("gateway_needs_rebuild", 4))
+            request.assert_not_called()
 
     def test_reused_pid_returns_failure_state_without_network(self):
         cfg = {"server": {"host": "127.0.0.1"}, "proxy": {"default_model": "claude-opus-5-5", "require_opus55": True, "agent_thread": True}}

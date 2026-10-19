@@ -26,4 +26,4 @@ Go, Git for Windows, Python, Chrome and Claude Code are installed separately fro
 
 ## V2 protocol research
 
-Continuation request fields were checked against a public Notion client resource snapshot on 2026-10-19. Source URL, module and SHA-256 are recorded in docs/V2_PLAN.md. The client bundle is not redistributed; V2 contains the transport adaptation and its synthetic regression tests.
+Continuation fields were checked against the public Notion resource https://app.notion.com/_assets/18091-dbf6e46b0f9c0543.js on 2026-10-19, module 917830. SHA-256: 10d8dda26fcea3de00990e22c6f08997b9953d4f2522963b4fe46782604a47b4. The transport uses sendEventToAgentThread and forward transcript queries. The client bundle is not redistributed; only the necessary adaptation and synthetic tests are included.

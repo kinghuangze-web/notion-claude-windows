@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.0 — 2026-10-19
+
+- Make the bilingual README the single execution tutorial for agents; remove double-click wrappers and duplicate human-oriented guides.
+- Remove the bare/slim implementation and the separate isolated-profile/8082 launcher. Retain only native framework routing through the primary V2 gateway, preserving normal user settings discovery.
+- Back up and migrate existing configuration to V2 by default, reject readiness from old running processes, and test that state regression.
+- Retain pinned transport patches, safe older-source migration, native/MCP acceptance, owned process lifecycle, cleanup and provenance.
+- Add reachable-history/identity privacy scanning and a deleted-secret regression; record the scoped public-surface and exact-private-value audit.
+- Keep the deployment incident and the requirement to verify the user's actual directory/entry point in both README languages.
+
+Earlier entries below describe historical releases; their obsolete entry points are no longer supported.
+
 ## 2.0.1 — 2026-10-19
 
 - Bridge the ordinary CC Switch / Claude command path: the existing dashboard gateway can opt into persistent V2 transport with proxy.agent_session_v2=true.

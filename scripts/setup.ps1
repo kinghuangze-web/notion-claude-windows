@@ -2,10 +2,10 @@ param([switch]$SkipTests)
 . "$PSScriptRoot\env.ps1"
 . "$PSScriptRoot\protect-runtime.ps1"
 Set-Location -LiteralPath $ProjectRoot
-if ((Test-Path -LiteralPath 'runtime\gateway-process.json') -or (Test-Path -LiteralPath 'runtime\full\gateway-process.json')) { throw 'Stop both project gateways before rebuilding (Stop-Gateway.cmd and Stop-Full-Gateway.cmd).' }
+if ((Test-Path -LiteralPath 'runtime\gateway-process.json') -or (Test-Path -LiteralPath 'runtime\full\gateway-process.json')) { throw 'Stop recorded project gateways with scripts/project.ps1 -Action stop before rebuilding.' }
 foreach ($pair in @(@('Go',$ProjectGo),@('Python',$ProjectPython),@('Claude Code',$ProjectClaude),@('Git Bash',$ProjectBash))) {
     if (-not $pair[1] -or -not (Test-Path -LiteralPath $pair[1] -PathType Leaf)) {
-        throw "Missing $($pair[0]). See docs/INSTALL_WINDOWS.md or tools.local.ps1.example."
+        throw "Missing $($pair[0]). See README.md or tools.local.ps1.example."
     }
 }
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'Git for Windows is not on PATH.' }
@@ -51,16 +51,23 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Applicable Go regression tests failed.' }
     }
 } finally { Pop-Location }
+$buildRecord = [ordered]@{
+    transport = 'agent-session-v2'
+    upstream = $base
+    exe_sha256 = (Get-FileHash -LiteralPath "$ProjectRoot\runtime\notion-manager.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+    patch_sha256 = (Get-FileHash -LiteralPath "$ProjectRoot\patches\opus55.patch" -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+$buildRecord | ConvertTo-Json | Set-Content -LiteralPath "$ProjectRoot\runtime\build-info.json" -Encoding UTF8
 & .\.venv\Scripts\python.exe .\scripts\manage.py init
 if ($LASTEXITCODE -ne 0) { throw 'Local configuration initialization failed.' }
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_launcher.py -v
 if ($LASTEXITCODE -ne 0) { throw 'Launcher checks failed.' }
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_readiness.py -v
 if ($LASTEXITCODE -ne 0) { throw 'Readiness state checks failed.' }
-& .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_full_mode.py -v
-if ($LASTEXITCODE -ne 0) { throw 'Full-mode launcher checks failed.' }
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_patches.py -v
 if ($LASTEXITCODE -ne 0) { throw 'Patch install and upgrade checks failed.' }
 & .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_gateway_environment.py -v
 if ($LASTEXITCODE -ne 0) { throw 'Ordinary route activation checks failed.' }
-Write-Output 'Setup complete. Start-Gateway.cmd starts the dashboard; import a Notion account locally before inference.'
+& .\.venv\Scripts\python.exe -m unittest discover -s scripts -p test_config_migration.py -v
+if ($LASTEXITCODE -ne 0) { throw 'Configuration migration checks failed.' }
+Write-Output 'Setup complete. Use scripts/project.ps1 -Action start, then follow README.md readiness and verification.'

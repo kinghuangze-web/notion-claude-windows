@@ -1,41 +1,35 @@
-# 验证记录
+# Verification scope / 验证范围
 
-以下保留 V1 精简模式的实现或历史验证。V2 使用独立完整入口，见 [V2 使用](FULL_MODE.md)、[V2 验证](VALIDATION_V2.md)；不要把 V1 的限制或样例通过自动套到 V2。
+Date / 日期：2026-10-19。Evidence is scoped to the environment and behavior below. Raw sessions, identifiers, account data, user paths and file contents are not distributed.
 
-记录日期：2026-10-14。这里保留可公开的检查范围与结论；原始会话、个人路径、账号标识和工作区额度记录不分发。
+## Real upstream behavior / 真实上游行为
 
-## 固定模型原实现的真实验收
+- Isolated native CLI 2.1.300: native Skill, exact Read/Write/Edit/Read file round-trip and actual local MCP nonce/HMAC passed. One CLI session had 18 successful upstream turns with one Notion thread. Initial tool/Skill registration and later dynamic tool counts are discovery evidence, not proof every tool ran.
+- Ordinary installed CLI 2.1.303: tested from the actual user working directory with the existing CC Switch route, normal user configuration and auto mode. No launcher, alternate config directory or process route override. Reply and resumed Read → Write → Edit → Read passed, with exact random file bytes and final success. Six successful upstream turns used one creation and five continuations.
+- Requested/confirmed/selected model fields matched the live Opus 5.5 selection. This does not independently verify model weights.
+- The older 8081 deployment previously failed with upstream HTTP 400; its actual installation was upgraded. The isolated launcher result had not covered this path. The README incident notice documents the gap.
 
-环境：Windows x64，Claude Code 2.1.299，Go 1.27.2，Python 3.11.9，PyYAML 6.0.2。
+隔离环境验证过原生 Skill、文件闭环和独立 MCP 证明；普通入口另外在真实用户工作目录、原 CC Switch 路由、auto 模式下验证了对话、文件和恢复。两个环境的证据分开使用，不把工具注册当作执行成功。
 
-| 检查 | 结果 |
-|---|---|
-| 原文“连接成功”对话 | 通过真实 Notion 推理 |
-| pwd、创建周一至周日目录、列出结果 | 成功 Bash 结果及独立目录检查通过 |
-| 文章测试笔记的创建和 Read 读回 | 精确文件字节及成功工具结果通过 |
-| 随机内容盲读 | 提示词未包含随机答案；实际 Read 返回与文件一致 |
-| 读取 SKILL.md 后执行文件任务 | Read Skill → Read 输入 → Bash 写入 → Read 输出；精确字节通过 |
-| 型号确认 | 五项最终成功阶段共 17 条上游确认记录；请求、model、selectedModel 一致，实时列表标为 Opus 5.5 |
-| 不降级 Auto | 实际 Auto 请求被拒绝；无效型号、缺字段、错线程和不一致场景回归通过 |
-| C 盘已有三份 Claude 配置/历史 | 各阶段前后存在性、长度、时间戳与 SHA-256 不变；不是全盘零写入证明 |
+## Current agent-only packaging / 本轮 Agent 版本
 
-## 发布工具包验证
+The transport patch was retained. The supported entry now uses one V2 gateway, preserves native settings discovery and removes the old slim and isolated-directory launchers.
 
-在新的独立目录中重新取得固定源码并应用公开最小补丁，未导入任何账号或原配置。
+Checks cover:
 
-- 环境：Windows PowerShell 5.1、Go 1.27.2、Python 3.14.2、PyYAML 6.0.3、Claude Code 2.1.299。
-- 自动路径检测、Python wheel 安装、固定提交下载、补丁应用、`go build -trimpath` 通过。
-- 所有 Windows 适用 Go 测试通过；只排除 Unix owner-only mode 断言，运行时改用 Windows NTFS ACL。
-- 四项启动器回归通过：供应商隔离、固定模型拒绝非法覆盖、实际工具限制、中文 Skill UTF-8 读取。
-- 公开补丁的五个核心源码文件与真实验收原实现文本相同，仅换行格式不同；账号/额度诊断测试未纳入分发。
-- 独立 18081 端口生命周期：真实 exe 启动、重复启动复用、旧 PID 时间拒绝、停止与重启通过，Notion 推理请求数为 0。
-- 清理在专门的合成测试目录中执行：错误项目标记拒绝、预览不改文件、局部删除保留文档、显式整目录删除通过；不依赖 .venv。
-- PowerShell 语法和验收脚本预览检查通过。完整五项真实验收需由每个使用者导入自己的账号后执行。
+- Native prompt/tool discovery preserved; parent route/application-data/config-directory variables unchanged; only child API routing changes.
+- V2 configuration migration preserves previous values and stores an exact local backup.
+- Old running process records cannot report V2 readiness. The executable hash must match its V2 build record; a changed binary requires rebuilding.
+- Fresh patch application, older-source migration and repeated setup compatibility.
+- Real executable lifecycle on an account-free fixture port: owned startup/reuse/stop/restart, stale-PID refusal and loopback authentication. Zero Notion inference requests.
+- Preview-first cleanup, invalid-root refusal, owned session/process checks and preservation of the source of known older Junctions.
+- Allowlist/index scanning, full reachable-history/identity scanning, exact known-private-value comparison and a deleted-secret regression.
+- Python/PowerShell syntax, inference-free acceptance preview and installed native CLI version execution.
 
-首次发布包安装测试选中了 Python 3.14，PyYAML 6.0.2 缺少对应 wheel，要求 C++ 编译工具。改为 6.0.3 并限定二进制安装后通过，原始失败记录留在本机。
+当前改动主要是入口收敛、配置迁移、状态检查和隐私扫描。上述本地检查不构成新的模型推理成功记录；本轮没有为源码审计重复运行大套真实推理。合成验收仍须按 README 在目标部署执行，且不能替代用户真实入口验证。
 
-## 完成声明的边界
+## Not established / 尚未证明
 
-1.0.1 的 Agent 入口补充验证：五项 readiness 状态回归、原四项启动器回归通过；在独立无账号网关上实际取得 awaiting_account 与退出码 3。依赖预检在新目录不创建运行数据；从 Agent 子进程调用 PowerShell 5.1 和 CLI --version 的参数传递通过。继承不同 PowerShell 版本模块路径导致的安全模块加载问题，改为显式加载当前宿主模块后通过；未修改全局模块路径。这些检查未发 Notion 推理，固定模型原验收记录继续作为对应范围的证据。
+Complete Anthropic API semantics, every registered plugin/MCP/subtask, image/PDF model attachments, long-context compression, long-term concurrent reliability, token/cost accounting and official cloud features are not certified. The bridge uses Notion Agent's text transport; keeping native prompt text does not independently prove identical upstream role priority.
 
-验证到 CLI 和基本文字文件任务，以及 Notion 服务端报告的型号选择。没有独立验证后端权重、真实 Token/费用、完整 MCP/插件/Cowork、原生 Skill 命令、ARM64 或长期稳定性。Setup 成功与本地 HTTP 200 不等于某个新账号已通过真实推理。
+全部 API 语义、所有插件/MCP/子任务、附件、长上下文压缩、长期并发、Token/费用与官方云功能没有等价认证。新会话仍可能产生可见 Notion 对话；历史聊天不会自动删除。

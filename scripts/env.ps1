@@ -55,7 +55,6 @@ $projectEnvironment = @{
     XDG_CONFIG_HOME = "$ProjectRoot\runtime\xdg-config"
     XDG_DATA_HOME = "$ProjectRoot\runtime\xdg-data"
     XDG_STATE_HOME = "$ProjectRoot\runtime\xdg-state"
-    CLAUDE_CONFIG_DIR = "$ProjectRoot\runtime\claude"
     CLAUDE_CODE_TMPDIR = "$ProjectRoot\_tmp"
     CLAUDE_CODE_DEBUG_LOGS_DIR = "$ProjectRoot\logs\claude"
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
@@ -71,7 +70,7 @@ foreach ($name in $projectEnvironment.Keys) {
 foreach ($path in @($env:GOPATH, $env:GOMODCACHE, $env:GOCACHE, $env:GOTMPDIR,
     $env:PIP_CACHE_DIR, $env:PYTHONPYCACHEPREFIX, $env:APPDATA, $env:LOCALAPPDATA,
     $env:XDG_CACHE_HOME, $env:XDG_CONFIG_HOME, $env:XDG_DATA_HOME, $env:XDG_STATE_HOME,
-    $env:CLAUDE_CONFIG_DIR, $env:CLAUDE_CODE_DEBUG_LOGS_DIR,
+    $env:CLAUDE_CODE_DEBUG_LOGS_DIR,
     "$ProjectRoot\logs", "$ProjectRoot\evidence", "$ProjectRoot\demo")) {
     New-Item -ItemType Directory -Path $path -Force | Out-Null
 }

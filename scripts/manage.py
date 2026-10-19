@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import socket
 import subprocess
 import time
@@ -29,6 +30,16 @@ def config():
     return yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
 
 
+def verify_build():
+    try:
+        build = json.loads((RUNTIME / "build-info.json").read_text("utf-8-sig"))
+        valid = isinstance(build, dict) and build.get("transport") == "agent-session-v2" and build.get("exe_sha256") == hashlib.sha256(EXE.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        valid = False
+    if not valid:
+        raise RuntimeError("Gateway binary lacks a matching V2 build record; run setup before starting")
+
+
 def request(path, key=None):
     port = int(config()["server"]["port"])
     headers = {"Authorization": "Bearer " + key} if key else {}
@@ -42,7 +53,18 @@ def request(path, key=None):
 
 def initialize():
     if CONFIG.exists():
-        print("Configuration already exists; preserved.")
+        cfg = config()
+        if cfg.get("proxy", {}).get("agent_session_v2") is not True:
+            backup = RUNTIME / "private/backups" / ("pre-v2-" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3))
+            backup.mkdir(parents=True)
+            shutil.copy2(CONFIG, backup / "config.yaml")
+            cfg.setdefault("proxy", {})["agent_session_v2"] = True
+            temp = CONFIG.with_suffix(".yaml.tmp")
+            temp.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            temp.replace(CONFIG)
+            print("V2 enabled; previous configuration backed up locally. Restart an already-running gateway.")
+        else:
+            print("V2 configuration already exists; preserved.")
         return
     private = RUNTIME / "private"
     (private / "accounts").mkdir(parents=True, exist_ok=True)
@@ -60,6 +82,7 @@ def initialize():
         },
         "proxy": {
             "agent_thread": True,
+            "agent_session_v2": True,
             "require_opus55": True,
             "notion_api_base": "https://app.notion.com/api/v3",
             "default_model": "claude-opus-5-5",
@@ -90,10 +113,11 @@ def process_info(pid):
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
-def owned_process():
-    if not PROCESS_FILE.exists():
+def owned_process(record_path=None):
+    record_path = record_path or PROCESS_FILE
+    if not record_path.exists():
         return None
-    record = json.loads(PROCESS_FILE.read_text(encoding="utf-8"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
     current = process_info(record["pid"])
     if current is None:
         return None
@@ -118,26 +142,33 @@ def gateway_environment():
                             "NOTION_EXPECTED_EMAIL")):
             child_env.pop(name, None)
     child_env.pop("NOTION_AGENT_SESSION_DIR", None)
-    if config().get("proxy", {}).get("agent_session_v2") is True:
-        child_env["NOTION_AGENT_SESSION_DIR"] = str(RUNTIME / "agent-sessions-v2")
+    if config().get("proxy", {}).get("agent_session_v2") is not True:
+        raise RuntimeError("V2 configuration is required; run setup/init before starting")
+    child_env["NOTION_AGENT_SESSION_DIR"] = str(RUNTIME / "agent-sessions-v2")
     return child_env
 
 
 def start():
     if not EXE.is_file():
         raise RuntimeError("Windows gateway executable has not been built.")
+    verify_build()
     initialize()
     key = config()["server"]["api_key"]
     existing = owned_process()
     if existing:
+        if existing.get("transport") != "agent-session-v2":
+            raise RuntimeError("The owned process predates V2 activation; stop and restart it before use")
         code, _ = request("/v1/models", key)
         if code != 200:
             raise RuntimeError("Recorded gateway is running but not healthy; inspect logs/gateway.log.")
         print(f"Project gateway already running: PID {existing['pid']}.")
         return
     port = int(config()["server"]["port"])
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", port))
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            raise RuntimeError("The configured port is occupied by an unowned listener")
+    except OSError:
+        pass
     child_env = gateway_environment()
     log_path = ROOT / "logs" / "gateway.log"
     with log_path.open("ab") as output:
@@ -151,6 +182,7 @@ def start():
     save_json(PROCESS_FILE, {
         "pid": process.pid, "exe": str(EXE), "cwd": str(RUNTIME),
         "creation_date": identity["CreationDate"], "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "transport": "agent-session-v2", "exe_sha256": hashlib.sha256(EXE.read_bytes()).hexdigest(),
     })
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
@@ -164,14 +196,16 @@ def start():
         if process.poll() is not None:
             raise RuntimeError("Gateway exited; inspect logs/gateway.log.")
         time.sleep(0.25)
-    raise RuntimeError("Gateway did not become ready; stop it with Stop-Gateway.cmd and inspect its log.")
+    raise RuntimeError("Gateway did not become ready; use scripts/project.ps1 -Action stop and inspect its log.")
 
 
-def stop():
-    record = owned_process()
+def stop_record(record_path):
+    if not record_path.exists():
+        return
+    record = owned_process(record_path)
     if record:
         # Re-check ownership immediately before using Stop-Process.
-        owned_process()
+        owned_process(record_path)
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", f"Stop-Process -Id {int(record['pid'])} -ErrorAction Stop"],
             capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW,
@@ -183,8 +217,14 @@ def stop():
             time.sleep(0.2)
         if process_info(record["pid"]):
             raise RuntimeError("Project gateway still exists after stop.")
-    PROCESS_FILE.unlink(missing_ok=True)
+    record_path.unlink(missing_ok=True)
     print("Project gateway stopped; process record cleared.")
+
+
+def stop():
+    stop_record(PROCESS_FILE)
+    # Old isolated gateways are handled only for safe migration/cleanup.
+    stop_record(RUNTIME / "full/gateway-process.json")
 
 
 def status():
@@ -206,6 +246,7 @@ def status():
 
 
 def verify_local():
+    verify_build()
     if not owned_process():
         raise RuntimeError("Start the gateway before local verification.")
     key = config()["server"]["api_key"]
@@ -219,6 +260,8 @@ def verify_local():
         "agent_transport_enabled": config()["proxy"]["agent_thread"] is True,
         "default_model_is_opus55": config()["proxy"]["default_model"] == "claude-opus-5-5",
         "opus55_lock_enabled": config()["proxy"].get("require_opus55") is True,
+        "v2_configured": config()["proxy"].get("agent_session_v2") is True,
+        "v2_process_started": owned_process().get("transport") == "agent-session-v2",
         "exe_sha256": hashlib.sha256(EXE.read_bytes()).hexdigest(),
     }
     checks["passed"] = all(value is True for name, value in checks.items() if name != "exe_sha256")
@@ -234,6 +277,11 @@ def readiness():
     value = {"state": "awaiting_setup", "notion_inference_verified": False}
     code = 2
     if CONFIG.is_file() and EXE.is_file():
+        try:
+            verify_build()
+        except RuntimeError:
+            value["state"] = "gateway_needs_rebuild"
+            return value, 4
         cfg = config()
         if cfg.get("server", {}).get("host") != "127.0.0.1" or cfg.get("proxy", {}).get("default_model") != "claude-opus-5-5" or cfg.get("proxy", {}).get("require_opus55") is not True or cfg.get("proxy", {}).get("agent_thread") is not True:
             value["state"], code = "invalid_configuration", 4
@@ -246,6 +294,9 @@ def readiness():
             if not running:
                 value["state"] = "awaiting_gateway"
                 return value, 2
+            if cfg.get("proxy", {}).get("agent_session_v2") is not True or running.get("transport") != "agent-session-v2":
+                value["state"] = "gateway_needs_v2_restart"
+                return value, 4
             value["dashboard_url"] = f"http://127.0.0.1:{cfg['server']['port']}/dashboard/"
             try:
                 http, body = request("/health")
@@ -260,7 +311,7 @@ def readiness():
                         value["state"], code = "ready_for_acceptance", 0
                     else:
                         value["state"], code = "awaiting_account", 3
-                        value["human_step"] = "Import your own token_v2 in the local dashboard; see docs/ACCOUNT_IMPORT.md."
+                        value["human_step"] = "Owner must import their own Notion login locally; see README.md. Never send credentials to chat."
             except (OSError, ValueError, urllib.error.URLError):
                 value["state"], code = "gateway_unhealthy", 4
     return value, code

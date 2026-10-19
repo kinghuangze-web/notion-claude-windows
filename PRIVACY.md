@@ -1,26 +1,17 @@
-# 隐私与发布边界
+# Privacy / 隐私
 
-## 凭证与本地内容
+Credentials are imported by the owner locally. Never request login cookies in chat or extract browser credentials automatically. Gateway/API/admin values are generated or stored only in ignored runtime data, protected with the current user's and SYSTEM's NTFS ACL.
 
-本人在本机管理页导入 Notion token_v2。它是登录凭证，应按密码处理；普通页面 Integration Token 不可替代。Setup 随机生成网关 API Key 和管理密码，仓库只提供生成逻辑。
+凭证仅由所有者在本机导入，不要求聊天发送 Cookie，也不自动提取浏览器凭证。网关 Key、管理密码和账号文件仅留在忽略的 runtime，并使用当前用户与 SYSTEM 的 NTFS ACL。
 
-`runtime` 使用本用户和 SYSTEM 的 NTFS ACL；这控制本机文件读取，不是对拥有当前用户权限的程序进行隔离。
+The native child entry preserves ordinary user configuration discovery. It does not copy user settings, OAuth files or plugin directories into another profile. Its private runtime route file does contain local credentials and must never be published. Tasks, read files and tool results are sent to Notion; routing/data placement is not a filesystem sandbox.
 
-CLI 的任务、所读文件和工具结果会经过本机网关发给 Notion。启动器独立数据目录不会自动阻止工具访问其他路径；明确任务范围，先在 demo 验收。
+原生子进程入口保留正常用户配置发现，不复制用户设置、OAuth 文件或插件目录建立另一套资料。私有路由文件含本机凭证，不得发布。任务、文件和工具结果会发送给 Notion；数据目录不是文件沙箱。
 
-V2 将已有用户发现目录通过 Junction 接入本机独立配置，复制普通 settings/CLAUDE.md 和用户 MCP 注册配置，不复制登录/OAuth 文件。MCP 注册或 settings 内嵌的私有环境变量仍可能被复制到 runtime/full，不能据此认为该目录无秘密。
+Publish only release-files.txt: no runtime, logs, evidence, demo, private path overrides, accounts, raw requests, screenshots, binaries or downloaded client bundles. Historical source and commit identities must also be checked. Scanner findings report locations/rules only, never matched secrets. Review results and limits are in docs/PRIVACY_AUDIT.md.
 
-## 哪些内容不公开
+只发布白名单文件；运行数据、日志、证据、测试夹、路径覆盖、账号、原始请求、截图、二进制和下载的客户端 bundle 均不公开。历史源码和提交身份也须检查。扫描发现只报告位置和规则，不回显秘密。审计范围和边界见 docs/PRIVACY_AUDIT.md。
 
-- runtime、账号、Cookie、API Key、管理密码、真实 config.yaml。
-- Claude 会话、原始推理事件、任务日志、额度或工作区探针结果。
-- 本地软件路径覆盖、个人笔记、截图、机器用户名、邮箱与历史 Git 数据。
-- 下载源码、编译缓存、虚拟环境、临时目录和可执行程序。
+If an actual secret is ever published, removing its current file is insufficient: revoke/rotate it locally and determine the necessary historical cleanup. No actual leak was found in the current review.
 
-发布使用 `release-files.txt` 白名单，同时检查 Git 实际跟踪文件，避免把忽略规则当作已经脱敏。示例路径统一使用 `D:\Projects`，示例文字是合成验收标记。
-
-## 报错与分享
-
-Issue 只提交必要版本、步骤和脱敏错误句。分享日志前删除提示词、文件内容、邮箱、工作区/用户标识、个人绝对路径及凭证。不要上传 Cookie 面板或密码文件的截图。
-
-怀疑 token_v2 泄露时，由本人在 Notion 的登录/会话管理中处理对应会话，再更新本机凭证。删除 Git 文件不能撤销已泄露凭证或抹去公开历史。
+如未来确认泄漏，删除当前文件不足以补救，应在本机撤销/轮换凭证并判断历史清理范围。本次检查未发现实际泄漏。

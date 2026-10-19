@@ -15,9 +15,10 @@ class GatewayEnvironmentChecks(unittest.TestCase):
             self.assertEqual(os.environ["NOTION_AGENT_SESSION_DIR"], "foreign")
             self.assertEqual(os.environ["ANTHROPIC_BASE_URL"], "http://synthetic.invalid")
 
-    def test_legacy_does_not_inherit_another_gateway_session_directory(self):
+    def test_legacy_configuration_cannot_silently_start(self):
         with patch.object(manage, "config", return_value={"proxy": {}}), patch.dict(os.environ, {"NOTION_AGENT_SESSION_DIR": "foreign"}):
-            self.assertNotIn("NOTION_AGENT_SESSION_DIR", manage.gateway_environment())
+            with self.assertRaisesRegex(RuntimeError, "V2"):
+                manage.gateway_environment()
 
 
 if __name__ == "__main__":

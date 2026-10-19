@@ -1,18 +1,14 @@
 # Agent execution contract
 
-Goal: install this Windows x64 toolkit in a dedicated directory, load its locked Opus 5.5 gateway, and verify real file operations. Follow docs/AGENT_SETUP.md; preserve existing runtime configuration and unrelated installations.
+The bilingual execution tutorial is README.md. Deploy native Claude Code with the owner's Notion Opus 5.5 backend. V2 persistent transport is the only supported runtime; do not restore slim/bare launchers or substitute the model provider.
 
-- Run PowerShell scripts directly, not the .cmd wrappers that wait for a human keypress.
-- Start with scripts/doctor.ps1. Setup checks versions, downloads the pinned source and applies the patch; do not improvise a different upstream version.
-- Keep process-local data paths from env.ps1. Do not use setx, change global providers, install services, or stop a process merely because it occupies the desired port.
-- Use project.ps1 -Action ready for the state/exit-code contract. awaiting_account is a human handoff, not successful setup of inference.
-- Ask the user to follow docs/ACCOUNT_IMPORT.md locally. Do not ask them to paste token_v2 into agent chat or tool arguments, and do not retrieve browser login secrets automatically. This toolkit has no credential-extraction automation.
-- After the user reports import completed, inspect readiness again; do not treat their message or HTTP 200 alone as inference verification.
-- Prefer scripts/full.ps1 for the V2 native-framework entry. Use scripts/acceptance-full.ps1 -Run (optionally -Mcp) within authorized live-testing scope; it consumes allowance and creates a unique demo directory. Require successful Skill/tool results, exact file bytes, final CLI success, upstream model confirmation and one backend thread. Legacy acceptance.ps1 is the V1 suite and can create many chats.
-- If the user uses CC Switch and the ordinary Claude command, follow docs/CC_SWITCH.md and verify that exact path. A separate launcher success does not upgrade their selected provider. The ordinary 8081 gateway activates persistent transport only with proxy.agent_session_v2=true at process startup.
-- Scope subsequent tasks to the user-selected work directory. A process data directory is not a filesystem sandbox.
-- Report only redacted states and failure causes. Never publish runtime, logs, evidence, demo, private overrides or cookies. Git tracked paths must equal release-files.txt.
-- Preserve failure evidence locally. Cleanup is preview-first and must not remove user task outputs without authorization; use docs/CLEANUP.md.
-- Stop both owned gateways before rebuilding; preserve existing runtime configuration. Full mode uses port 8082 and runtime/full, legacy management remains on 8081. Do not migrate CC Switch implicitly.
-- Full mode preserves the native CLI prompt and tool registration, with user discovery junctions. Cleanup may only unlink the five recognized leaf junctions without traversing their targets; refuse other redirected entries.
-- This remains an experimental Notion Agent transport. Selected native Skill/file/MCP behaviors are verified in the documented environment; do not expand that to all plugins/subagents, complete API semantic equivalence, independently verified backend weights or zero visible Notion chats.
+- Identify the actual user directory, command, selected provider, API address and owning installation first. Preserve unrelated installations/providers and local changes. No services, system proxy changes or persistent global environment changes.
+- Use pinned-source setup and non-interactive scripts from README. Stop recorded owned processes before upgrading. Back up configuration and preserve account/Key/address values during V2 migration.
+- Separate configured files, deployed processes and verified behavior. Old process records must return gateway_needs_v2_restart. HTTP 200 and model titles do not prove inference.
+- Authentication is a local owner handoff: never request credentials in chat or extract browser secrets. Confirm the intended workspace; Basic counts are not official usage percentages or tokens.
+- Preserve native prompt, tool registration and normal settings discovery. The child-only routing entry changes neither global settings nor discovery directories. No bare mode, replacement prompts, tool whitelist or alternate CLAUDE_CONFIG_DIR.
+- For CC Switch plus ordinary Claude, verify that exact route/directory without launcher or routing overrides. Change only the requested Notion provider when authorized, with backup/readback. Isolated acceptance cannot substitute for this test.
+- Live acceptance consumes allowance. Require native tool events, exact random file bytes, final success, matching model and one-thread reuse. Registration is not execution; claimed MCP behavior needs actual calls and independent proof.
+- Verify the user's reply/file/resume path before claiming usable. Preserve failures and narrow evidence boundaries; not every API semantic, plugin, attachment or long-context behavior is certified.
+- Publish only release-files.txt after index/content/history/identity checks. Never commit runtime, logs, evidence, demos, accounts, private identifiers, secrets or path overrides. Audit output must not echo sensitive values.
+- Cleanup previews first and removes only authorized project targets. Close this project's CLI sessions; verify PID/executable/start-time ownership. Old Junctions are migration cleanup only: unlink known leaves without traversing user directories.

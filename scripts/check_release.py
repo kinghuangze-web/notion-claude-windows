@@ -8,12 +8,14 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PATTERNS = {
+    "personal_email": re.compile(r"\b[A-Za-z0-9._%+-]+@(?!(?:example\.(?:com|invalid)|users\.noreply\.github\.com)\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", re.I),
     "personal_windows_home": re.compile(r"[A-Za-z]:[\\/]+Users[\\/]+(?!Public(?:[\\/]|\b)|Default(?:[\\/]|\b))[^\s\"'<>]+", re.I),
     "private_source_path": re.compile(r"[A-Za-z]:[\\/]+wenjian[\\/]", re.I),
     "github_token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{30,})\b"),
     "literal_api_key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     "literal_cookie": re.compile(r"token_v2\s*[=:]\s*[\"']?[A-Za-z0-9%._-]{24,}", re.I),
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    "credential_assignment": re.compile(r"(?:api_key|auth_token|admin_password)[\"']?\s*[=:]\s*[\"'][A-Za-z0-9_-]{24,}[\"']", re.I),
 }
 
 
